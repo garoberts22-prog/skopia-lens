@@ -41,7 +41,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[    
         "http://localhost:5173",
-        "https://your-frontend.onrender.com",
+        "https://skopia-lens-frontend.onrender.com",
         "https://www.skopia.com.au",
         "https://skopia.com.au",
     ],
