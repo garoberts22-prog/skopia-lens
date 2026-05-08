@@ -113,7 +113,7 @@ export default function CheckSettingsCog({ checkId, settings, onSettingsChange, 
     const pop    = popoverRef.current
     const popH   = pop.offsetHeight
     const left   = Math.max(8, btn.right - 264)
-    const top    = Math.max(8, btn.top - popH - 6)
+    const top    = Math.max(8, btn.top - popH - 0)
     pop.style.left = left + 'px'
     pop.style.top  = top  + 'px'
   }, [open])
