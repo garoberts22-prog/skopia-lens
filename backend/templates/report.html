@@ -570,7 +570,7 @@
   <!-- Grade Ring -->
   <div class="grade-cell">
     <div class="grade-letter" style="color: {{ grade_colour }};">{{ overall_grade }}</div>
-    <div class="grade-score" style="color: {{ grade_colour }};">{{ overall_score }}%</div>
+    <div class="grade-score" style="color: {{ grade_colour }};">{{(overall_score or 0)  }}%</div>
     <div class="grade-label">Overall Score</div>
   </div>
 
@@ -725,49 +725,74 @@
         <span class="kv-key">In Progress</span>
         <span class="kv-val">{{ summary_stats.in_progress_tasks }}</span>
       </div>
-      <div class="kv-row">
-        <span class="kv-key">LOE Tasks</span>
-        <span class="kv-val">{{ summary_stats.loe_activities }}</span>
-      </div>
-      <div class="kv-row">
-        <span class="kv-key">Float (mean)</span>
-        <span class="kv-val">{{ float_histogram.mean_float_days | round(1) }}d</span>
-      </div>
-      <div class="kv-row">
-        <span class="kv-key">Float (median)</span>
-        <span class="kv-val">{{ float_histogram.median_float_days | round(1) }}d</span>
-      </div>
-    </div>
+        <div class="kv-row">
+  <span class="kv-key">LOE Tasks</span>
+  <span class="kv-val">{{ summary_stats.loe_activities }}</span>
+</div>
 
-    <!-- Relationship Breakdown -->
-    <div class="summary-card">
-      <div class="summary-card-title">Relationship Types</div>
-      {% set rb = relationship_breakdown %}
+<div class="kv-row">
+  <span class="kv-key">Float (mean)</span>
+  <span class="kv-val">
+    {% if float_histogram and float_histogram.mean_float_days is not none %}
+      {{ (float_histogram.mean_float_days or 0) | round(1) }}d
+    {% else %}
+      —
+    {% endif %}
+  </span>
+</div>
+
+<div class="kv-row">
+  <span class="kv-key">Float (median)</span>
+
+        <span class="kv-val">
+        {% if float_histogram and float_histogram.median_float_days is not none %}
+        {{ (float_histogram.median_float_days or 0) | round(1) }}d
+        {% else %}
+          —
+        {% endif %}
+        </span>
+      </div>
+
+</div>
+
+{% if relationship_breakdown %}
+
+<!-- Relationship Breakdown -->
+<div class="summary-card">
+  <div class="summary-card-title">Relationship Types</div>
+
+
+
+
+      {% set rb = relationship_breakdown or {} %}
       <div class="kv-row">
         <span class="kv-key">FS (Finish-Start)</span>
-        <span class="kv-val">{{ rb.FS | format_num }}</span>
+        <span class="kv-val">{{ (rb.FS if rb.FS is defined else 0) | format_num }}</span>
       </div>
       <div class="kv-row">
         <span class="kv-key">SS (Start-Start)</span>
-        <span class="kv-val">{{ rb.SS | format_num }}</span>
+        <span class="kv-val">{{ (rb.SS if rb.SS is defined else 0) | format_num }}</span>
       </div>
       <div class="kv-row">
         <span class="kv-key">FF (Finish-Finish)</span>
-        <span class="kv-val">{{ rb.FF | format_num }}</span>
+        <span class="kv-val">{{ (rb.FF if rb.FF is defined else 0) | format_num }}</span>
       </div>
       <div class="kv-row">
         <span class="kv-key">SF (Start-Finish)</span>
-        <span class="kv-val" {% if rb.SF > 0 %}style="color:var(--sk-fail);"{% endif %}>
-          {{ rb.SF | format_num }}
+        <span class="kv-val" {% if (rb.SF if rb.SF is defined else 0) > 0 %}style="color:var(--sk-fail);"{% endif %}>
+          {{ (rb.SF if rb.SF is defined else 0) | format_num }}
         </span>
       </div>
       <div class="kv-row" style="border-top:2px solid var(--sk-border);margin-top:2px;padding-top:4px;">
         <span class="kv-key" style="font-weight:600;">Total</span>
-        <span class="kv-val" style="font-weight:600;">{{ rb.total | format_num }}</span>
+        <span class="kv-val" style="font-weight:600;">{{ (rb.total if rb.total is defined else 0) | format_num }}</span>
       </div>
     </div>
 
+    {% endif %}
+    
     <!-- Top Issues callout -->
+
     {% set failing = checks | selectattr('status', 'equalto', 'fail') | list %}
     {% if failing %}
     <div class="callout callout-warn">
