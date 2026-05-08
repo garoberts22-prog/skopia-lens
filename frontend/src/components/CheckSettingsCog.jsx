@@ -76,7 +76,20 @@ export default function CheckSettingsCog({ checkId, settings, onSettingsChange, 
   const def        = CHECK_DEFS[checkId] ?? { label: checkId, params: [] }
   const cur        = settings ?? {}
   const isDisabled = cur.disabled === true
+  const closeTimer = useRef(null)
 
+  function delayedClose() {
+    closeTimer.current = setTimeout(() => {
+      setOpen(false)
+      }, 600)
+  }
+
+  function cancelClose() {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+  }
   // Has the user changed anything from defaults?
   const hasChanges = isDisabled || def.params.some(p => cur[p.key] != null && cur[p.key] !== p.default)
 
@@ -118,11 +131,12 @@ export default function CheckSettingsCog({ checkId, settings, onSettingsChange, 
   }
 
   return (
-    <div
-      style={{ position: 'relative' }}
-      onClick={e => e.stopPropagation()}
-      onMouseLeave={() => setOpen(false)}
+      <div
+  style={{ position: 'relative' }}
+  onClick={e => e.stopPropagation()}
+  onMouseLeave={() => setOpen(false)}
     >
+
       {/* Cog button */}
       <button
         ref={buttonRef}
@@ -144,8 +158,10 @@ export default function CheckSettingsCog({ checkId, settings, onSettingsChange, 
       {/* Popover */}
       {open && (
         <div
-          ref={popoverRef}
-          style={{
+            ref={popoverRef}
+            onMouseEnter={cancelClose}
+            onMouseLeave={delayedClose}
+            style={{
             position: 'fixed', zIndex: 9000,
             background: '#fff',
             border: `1px solid ${SK.border}`,
