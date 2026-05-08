@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Open+Sans:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --sk-cyan:    #1EC8D4;
+  --sk-peri:    #4A6FE8;
+  --sk-blue:    #2A4DCC;
+  --grad:       linear-gradient(135deg, #1EC8D4, #4A6FE8, #2A4DCC);
+  --sk-header:  #1E1E1E;
+  --sk-nav:     #16213e;
+  --sk-bg:      #F7F8FC;
+  --sk-card:    #FFFFFF;
+  --sk-border:  #E2E6F0;
+  --sk-text:    #1A1A2E;
+  --sk-muted:   #6B7280;
+  --sk-pass:    #16A34A;
+  --sk-warn:    #D97706;
+  --sk-fail:    #DC2626;
+  --sk-info:    #2563EB;
+  --font-head:  'Montserrat', Arial, sans-serif;
+  --font-body:  'Open Sans', Arial, sans-serif;
+  --font-mono:  'JetBrains Mono', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--sk-bg);
+  color: var(--sk-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.sk-drop-zone {
+  border: 2px dashed transparent;
+  background:
+    linear-gradient(white, white) padding-box,
+    linear-gradient(135deg, #1EC8D4, #4A6FE8, #2A4DCC) border-box;
+  border-radius: 14px;
+  transition: box-shadow 0.2s, transform 0.15s;
+}
+.sk-drop-zone:hover, .sk-drop-zone.drag-over {
+  box-shadow: 0 8px 32px rgba(42,77,204,0.15);
+  transform: translateY(-2px);
+}
+.sk-drop-zone-baseline {
+  border: 2px dashed transparent;
+  background:
+    linear-gradient(white, white) padding-box,
+    linear-gradient(135deg, #7C3AED, #4A6FE8) border-box;
+  border-radius: 14px;
+  transition: box-shadow 0.2s, transform 0.15s;
+}
+.sk-drop-zone-baseline:hover, .sk-drop-zone-baseline.drag-over {
+  box-shadow: 0 8px 32px rgba(124,58,237,0.15);
+  transform: translateY(-2px);
+}
+
+@keyframes sk-spin { to { transform: rotate(360deg); } }
+.sk-spinner {
+  width: 38px; height: 38px;
+  border: 3px solid #E2E6F0;
+  border-top-color: #4A6FE8;
+  border-radius: 50%;
+  animation: sk-spin 0.75s linear infinite;
+}
+
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}
+.sk-progress-bar {
+  background: var(--grad);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+  animation: progress-pulse 1.4s ease-in-out infinite;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.25); }

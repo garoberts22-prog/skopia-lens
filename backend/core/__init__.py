@@ -1,0 +1,1 @@
+# ScheduleCheck - Core package

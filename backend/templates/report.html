@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  /*
+   * SKOPIA Lens — PDF Report Template (v1.0)
+   * Rendered server-side by WeasyPrint from a Jinja2 template.
+   *
+   * DESIGN RULES:
+   *   - @page sets A4 landscape (297 × 210 mm) with 12mm margins
+   *   - No CSS grid — WeasyPrint support is partial; use flex + table
+   *   - No border-image or background-clip text — not supported in WeasyPrint
+   *   - Gradient accents are rendered as inline SVG (most reliable cross-engine)
+   *   - Fonts loaded from Google Fonts CDN (requires internet at render time)
+   *   - All colours reference SKOPIA brand tokens defined in :root
+   */
+
+  @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Open+Sans:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  @page {
+    size: A4 landscape;
+    margin: 12mm 14mm 14mm 14mm;
+
+    /* Running footer on every page */
+    @bottom-left {
+      content: "SKOPIA Lens  ·  Schedule Health Report  ·  Confidential";
+      font-family: 'Open Sans', Arial, sans-serif;
+      font-size: 7pt;
+      color: #9CA3AF;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 7pt;
+      color: #9CA3AF;
+    }
+  }
+
+  /* First page — no running footer (covered by doc footer block) */
+  @page :first {
+    @bottom-left { content: ""; }
+    @bottom-right { content: ""; }
+  }
+
+  :root {
+    --sk-cyan:   #1EC8D4;
+    --sk-peri:   #4A6FE8;
+    --sk-blue:   #2A4DCC;
+    --sk-header: #1E1E1E;
+    --sk-bg:     #F7F8FC;
+    --sk-card:   #FFFFFF;
+    --sk-border: #E2E6F0;
+    --sk-text:   #1A1A2E;
+    --sk-muted:  #6B7280;
+    --sk-pass:   #16A34A;
+    --sk-warn:   #D97706;
+    --sk-fail:   #DC2626;
+    --sk-info:   #2563EB;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 9pt;
+    color: var(--sk-text);
+    background: var(--sk-bg);
+    line-height: 1.5;
+  }
+
+  /* ── COVER HEADER ───────────────────────────────────────────────────────── */
+
+  .doc-header {
+    background: var(--sk-header);
+    padding: 18px 20px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-radius: 6px 6px 0 0;
+    page-break-inside: avoid;
+  }
+
+  .wordmark {
+    /* WeasyPrint doesn't support -webkit-background-clip text.
+       Use flat blue as the fallback — still on-brand. */
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 26pt;
+    font-weight: 900;
+    color: var(--sk-cyan);   /* cyan — closest single-stop to gradient start */
+    letter-spacing: -0.5px;
+    line-height: 1;
+  }
+
+  .wordmark-tier {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 8pt;
+    color: #8896A7;
+    margin-top: 3px;
+    letter-spacing: 0.5px;
+  }
+
+  .doc-meta {
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8pt;
+    color: #8896A7;
+    line-height: 2;
+  }
+
+  .doc-meta strong {
+    color: #E2E8F0;
+  }
+
+  /* Gradient accent strip — rendered as block element (WeasyPrint safe) */
+  .grad-strip {
+    height: 4px;
+    background: linear-gradient(to right, #1EC8D4, #4A6FE8, #2A4DCC);
+    margin-bottom: 20px;
+  }
+
+  /* ── SECTION TITLES ─────────────────────────────────────────────────────── */
+
+  .section {
+    margin-bottom: 18px;
+    page-break-inside: avoid;
+  }
+
+  .section-title {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 10pt;
+    font-weight: 700;
+    color: var(--sk-text);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding-bottom: 5px;
+    border-bottom: 2px solid var(--sk-border);
+    margin-bottom: 10px;
+  }
+
+  .section-title .section-accent {
+    /* Coloured left pip instead of gradient text */
+    display: inline-block;
+    width: 4px;
+    height: 12px;
+    background: var(--sk-cyan);
+    border-radius: 2px;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  /* ── SUMMARY ROW ────────────────────────────────────────────────────────── */
+
+  .summary-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 18px;
+    page-break-inside: avoid;
+  }
+
+  /* Grade ring cell — left */
+  .grade-cell {
+    flex: 0 0 120px;
+    background: var(--sk-card);
+    border: 1px solid var(--sk-border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 14px 10px;
+  }
+
+  .grade-letter {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 38pt;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .grade-score {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11pt;
+    font-weight: 500;
+    margin-top: 2px;
+  }
+
+  .grade-label {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 7pt;
+    color: var(--sk-muted);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Stat tiles — right */
+  .stat-tiles {
+    flex: 1;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .stat-tile {
+    flex: 1 1 80px;
+    background: var(--sk-card);
+    border: 1px solid var(--sk-border);
+    border-radius: 6px;
+    padding: 10px 10px 8px;
+    min-width: 70px;
+  }
+
+  .stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 15pt;
+    font-weight: 500;
+    color: var(--sk-text);
+    line-height: 1.1;
+    display: block;
+  }
+
+  .stat-label {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 7pt;
+    color: var(--sk-muted);
+    margin-top: 3px;
+    line-height: 1.3;
+  }
+
+  /* ── CHECKS TABLE ───────────────────────────────────────────────────────── */
+
+  .checks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8.5pt;
+    font-family: 'Open Sans', Arial, sans-serif;
+  }
+
+  .checks-table thead th {
+    background: var(--sk-header);
+    color: #E2E8F0;
+    padding: 7px 8px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+  }
+
+  .checks-table thead th:first-child {
+    border-radius: 4px 0 0 0;
+  }
+
+  .checks-table thead th:last-child {
+    border-radius: 0 4px 0 0;
+    text-align: right;
+  }
+
+  .checks-table tbody tr:nth-child(even) td {
+    background: #FAFBFF;
+  }
+
+  .checks-table tbody td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+  }
+
+  .checks-table td:last-child {
+    text-align: right;
+  }
+
+  /* Status dot + text in same cell */
+  .check-status-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: inline-block;
+  }
+
+  .status-pass { background: var(--sk-pass); }
+  .status-warn { background: var(--sk-warn); }
+  .status-fail { background: var(--sk-fail); }
+  .status-info { background: var(--sk-info); }
+
+  .text-pass { color: var(--sk-pass); font-weight: 600; }
+  .text-warn { color: var(--sk-warn); font-weight: 600; }
+  .text-fail { color: var(--sk-fail); font-weight: 600; }
+  .text-info { color: var(--sk-info); font-weight: 600; }
+
+  .dcma-badge {
+    display: inline-block;
+    background: #EFF6FF;
+    color: var(--sk-info);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+    font-weight: 500;
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .metric-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8pt;
+  }
+
+  /* Score bar in table */
+  .score-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+
+  .score-bar-bg {
+    width: 50px;
+    height: 5px;
+    background: var(--sk-border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .score-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+  }
+
+  .score-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7.5pt;
+    color: var(--sk-muted);
+    min-width: 28px;
+    text-align: right;
+  }
+
+  /* ── LONGEST PATH TABLE ─────────────────────────────────────────────────── */
+
+  .path-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7.5pt;
+    font-family: 'Open Sans', Arial, sans-serif;
+    page-break-before: always;
+  }
+
+  .path-table thead th {
+    background: var(--sk-header);
+    color: #E2E8F0;
+    padding: 6px 8px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+  }
+
+  .path-table thead th:last-child { text-align: right; }
+
+  .path-table tbody tr:nth-child(even) td {
+    background: #FAFBFF;
+  }
+
+  .path-table tbody td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+  }
+
+  .path-table td:last-child { text-align: right; }
+
+  .critical-row td {
+    background: #FFF5F5 !important;
+  }
+
+  .milestone-marker {
+    font-size: 7pt;
+    color: var(--sk-peri);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── CALLOUT BOXES ──────────────────────────────────────────────────────── */
+
+  .callout {
+    border-radius: 5px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    font-size: 8.5pt;
+    page-break-inside: avoid;
+  }
+
+  .callout-warn {
+    background: #FFFBEB;
+    border-left: 4px solid var(--sk-warn);
+    color: #78350F;
+  }
+
+  .callout-info {
+    background: #EFF6FF;
+    border-left: 4px solid var(--sk-info);
+    color: #1E3A8A;
+  }
+
+  .callout-pass {
+    background: #F0FDF4;
+    border-left: 4px solid var(--sk-pass);
+    color: #14532D;
+  }
+
+  /* ── DOC FOOTER (page 1 only) ───────────────────────────────────────────── */
+
+  .doc-footer {
+    margin-top: 20px;
+    padding-top: 8px;
+    border-top: 1px solid var(--sk-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7pt;
+    color: var(--sk-muted);
+  }
+
+  /* ── TWO-COLUMN LAYOUT (checks + summary) ───────────────────────────────── */
+
+  .two-col {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 18px;
+    page-break-inside: avoid;
+  }
+
+  .two-col-main {
+    flex: 2;
+  }
+
+  .two-col-side {
+    flex: 1;
+  }
+
+  /* Summary card in sidebar */
+  .summary-card {
+    background: var(--sk-card);
+    border: 1px solid var(--sk-border);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 10px;
+    page-break-inside: avoid;
+  }
+
+  .summary-card-title {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 8pt;
+    font-weight: 700;
+    color: var(--sk-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+  }
+
+  .kv-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    border-bottom: 1px solid #F3F4F6;
+    font-size: 8pt;
+  }
+
+  .kv-row:last-child {
+    border-bottom: none;
+  }
+
+  .kv-key {
+    color: var(--sk-muted);
+  }
+
+  .kv-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7.5pt;
+    color: var(--sk-text);
+    font-weight: 500;
+  }
+
+  /* Pass/fail summary counts */
+  .result-counts {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+
+  .result-pill {
+    flex: 1;
+    text-align: center;
+    padding: 6px 4px;
+    border-radius: 5px;
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 13pt;
+    font-weight: 900;
+    line-height: 1;
+  }
+
+  .result-pill-label {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 6.5pt;
+    font-weight: 600;
+    margin-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: block;
+  }
+
+  .pill-pass { background: #F0FDF4; color: var(--sk-pass); }
+  .pill-warn { background: #FFFBEB; color: var(--sk-warn); }
+  .pill-fail { background: #FEF2F2; color: var(--sk-fail); }
+
+  /* Recommendation block */
+  .rec-list {
+    margin: 0;
+    padding-left: 14px;
+    font-size: 8pt;
+    color: var(--sk-text);
+    line-height: 1.7;
+  }
+
+  .rec-list li {
+    margin-bottom: 2px;
+  }
+
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     HEADER
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="doc-header">
+  <div>
+    <div class="wordmark">SKOPIA.</div>
+    <div class="wordmark-tier">Schedule Health Report &nbsp;·&nbsp; Lens v0.9</div>
+  </div>
+  <div class="doc-meta">
+    <strong>{{ project_name }}</strong><br>
+    Format: {{ source_format | upper }}&nbsp;&nbsp;·&nbsp;&nbsp;File: {{ source_filename }}<br>
+    Data Date: {{ data_date }}&nbsp;&nbsp;·&nbsp;&nbsp;Generated: {{ generated_at }}
+  </div>
+</div>
+<div class="grad-strip"></div>
+
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     SUMMARY ROW — Grade ring + stat tiles
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="summary-row">
+
+  <!-- Grade Ring -->
+  <div class="grade-cell">
+    <div class="grade-letter" style="color: {{ grade_colour }};">{{ overall_grade }}</div>
+    <div class="grade-score" style="color: {{ grade_colour }};">{{ overall_score }}%</div>
+    <div class="grade-label">Overall Score</div>
+  </div>
+
+  <!-- Stat Tiles -->
+  <div class="stat-tiles">
+    <div class="stat-tile">
+      <span class="stat-value">{{ summary_stats.total_activities | format_num }}</span>
+      <span class="stat-label">Total Activities</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-value">{{ summary_stats.incomplete_tasks | format_num }}</span>
+      <span class="stat-label">Incomplete Tasks</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-value">{{ summary_stats.completed_tasks | format_num }}</span>
+      <span class="stat-label">Completed</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-value">{{ summary_stats.milestones | format_num }}</span>
+      <span class="stat-label">Milestones</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-value">{{ summary_stats.total_relationships | format_num }}</span>
+      <span class="stat-label">Relationships</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-value">{{ summary_stats.calendars | format_num }}</span>
+      <span class="stat-label">Calendars</span>
+    </div>
+  </div>
+
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TWO-COLUMN: Checks table (left) + Summary card (right)
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="two-col">
+
+  <!-- ── LEFT: Health Checks Table ───────────────────────────────────────── -->
+  <div class="two-col-main">
+    <div class="section-title">
+      <span class="section-accent"></span>DCMA Health Checks
+    </div>
+
+    <table class="checks-table">
+      <thead>
+        <tr>
+          <th style="width: 12%">Ref</th>
+          <th style="width: 26%">Check</th>
+          <th style="width: 14%">Status</th>
+          <th style="width: 22%">Metric</th>
+          <th style="width: 10%">Threshold</th>
+          <th style="width: 8%">Flagged</th>
+          <th style="width: 8%">Score</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for check in checks %}
+        <tr>
+          <td>
+            {% if check.dcma_ref %}
+              <span class="dcma-badge">{{ check.dcma_ref }}</span>
+            {% else %}
+              <span class="dcma-badge" style="background:#F3F4F6;color:#9CA3AF;">Extra</span>
+            {% endif %}
+          </td>
+          <td style="font-weight:600;">{{ check.check_name }}</td>
+          <td>
+            <div class="check-status-cell">
+              <span class="status-dot status-{{ check.status }}"></span>
+              <span class="text-{{ check.status }}">{{ check.status | upper }}</span>
+            </div>
+          </td>
+          <td>
+            <span class="metric-mono">{{ check.metric_value | format_metric(check.metric_label) }}</span>
+          </td>
+          <td>
+            {% if check.threshold_value is not none %}
+              <span class="metric-mono">
+                {% if check.metric_label and '%' in check.metric_label %}
+                  ≤{{ check.threshold_value }}%
+                {% else %}
+                  {{ check.threshold_value }}
+                {% endif %}
+              </span>
+            {% else %}
+              <span style="color:var(--sk-muted);">—</span>
+            {% endif %}
+          </td>
+          <td style="text-align:right;">
+            {% if check.flagged_count > 0 %}
+              <span style="color:var(--sk-fail);font-family:'JetBrains Mono',monospace;font-size:7.5pt;font-weight:600;">{{ check.flagged_count }}</span>
+            {% else %}
+              <span style="color:var(--sk-pass);font-family:'JetBrains Mono',monospace;font-size:7.5pt;">0</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="score-bar-wrap">
+              <div class="score-bar-bg">
+                <div class="score-bar-fill"
+                     style="width:{{ check.normalised_score | int }}%;
+                            background:{{ check.status | status_colour }};"></div>
+              </div>
+              <span class="score-text">{{ check.normalised_score | int }}</span>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+  </div><!-- /two-col-main -->
+
+
+  <!-- ── RIGHT: Summary Card ──────────────────────────────────────────────── -->
+  <div class="two-col-side">
+
+    <!-- Pass / Warn / Fail counts -->
+    <div class="summary-card">
+      <div class="summary-card-title">Check Results</div>
+      <div class="result-counts">
+        <div class="result-pill pill-pass">
+          {{ pass_count }}
+          <span class="result-pill-label">Pass</span>
+        </div>
+        <div class="result-pill pill-warn">
+          {{ warn_count }}
+          <span class="result-pill-label">Warn</span>
+        </div>
+        <div class="result-pill pill-fail">
+          {{ fail_count }}
+          <span class="result-pill-label">Fail</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Project Metadata -->
+    <div class="summary-card">
+      <div class="summary-card-title">Project Details</div>
+      {% if schedule_data %}
+        <div class="kv-row">
+          <span class="kv-key">Start</span>
+          <span class="kv-val">{{ schedule_data.project_start | format_date }}</span>
+        </div>
+        <div class="kv-row">
+          <span class="kv-key">Finish</span>
+          <span class="kv-val">{{ schedule_data.project_finish | format_date }}</span>
+        </div>
+      {% endif %}
+      <div class="kv-row">
+        <span class="kv-key">In Progress</span>
+        <span class="kv-val">{{ summary_stats.in_progress_tasks }}</span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-key">LOE Tasks</span>
+        <span class="kv-val">{{ summary_stats.loe_activities }}</span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-key">Float (mean)</span>
+        <span class="kv-val">{{ float_histogram.mean_float_days | round(1) }}d</span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-key">Float (median)</span>
+        <span class="kv-val">{{ float_histogram.median_float_days | round(1) }}d</span>
+      </div>
+    </div>
+
+    <!-- Relationship Breakdown -->
+    <div class="summary-card">
+      <div class="summary-card-title">Relationship Types</div>
+      {% set rb = relationship_breakdown %}
+      <div class="kv-row">
+        <span class="kv-key">FS (Finish-Start)</span>
+        <span class="kv-val">{{ rb.FS | format_num }}</span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-key">SS (Start-Start)</span>
+        <span class="kv-val">{{ rb.SS | format_num }}</span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-key">FF (Finish-Finish)</span>
+        <span class="kv-val">{{ rb.FF | format_num }}</span>
+      </div>
+      <div class="kv-row">
+        <span class="kv-key">SF (Start-Finish)</span>
+        <span class="kv-val" {% if rb.SF > 0 %}style="color:var(--sk-fail);"{% endif %}>
+          {{ rb.SF | format_num }}
+        </span>
+      </div>
+      <div class="kv-row" style="border-top:2px solid var(--sk-border);margin-top:2px;padding-top:4px;">
+        <span class="kv-key" style="font-weight:600;">Total</span>
+        <span class="kv-val" style="font-weight:600;">{{ rb.total | format_num }}</span>
+      </div>
+    </div>
+
+    <!-- Top Issues callout -->
+    {% set failing = checks | selectattr('status', 'equalto', 'fail') | list %}
+    {% if failing %}
+    <div class="callout callout-warn">
+      <strong style="font-size:7.5pt;text-transform:uppercase;letter-spacing:0.05em;">
+        Action Required
+      </strong>
+      <ul class="rec-list" style="margin-top:4px;">
+        {% for c in failing[:4] %}
+          <li>{{ c.check_name }}: {{ c.recommendation | truncate(80) }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+  </div><!-- /two-col-side -->
+
+</div><!-- /two-col -->
+
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     LONGEST PATH (Critical Path) — page 2
+═══════════════════════════════════════════════════════════════════════════ -->
+{% if longest_path %}
+
+<div class="section" style="page-break-before: always;">
+  <div class="section-title">
+    <span class="section-accent"></span>Critical Path — Longest Path Trace
+  </div>
+
+  <div class="callout callout-info" style="margin-bottom:10px;">
+    <strong>{{ longest_path | length }} activities</strong> on the longest driving path.
+    Total duration: <strong>{{ longest_path | sum(attribute='duration_days') }}
+    working days</strong> from project start to finish.
+  </div>
+
+  <table class="path-table">
+    <thead>
+      <tr>
+        <th style="width:4%">#</th>
+        <th style="width:14%">Activity ID</th>
+        <th style="width:38%">Activity Name</th>
+        <th style="width:13%">Start</th>
+        <th style="width:13%">Finish</th>
+        <th style="width:10%">Duration</th>
+        <th style="width:8%">Float</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for act in longest_path %}
+      <tr {% if act.float_days == 0 and not act.is_milestone %}class="critical-row"{% endif %}>
+        <td style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+          {{ loop.index }}
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;">{{ act.id }}</td>
+        <td>
+          {% if act.is_milestone %}
+            <span class="milestone-marker">◆ </span>
+          {% endif %}
+          {{ act.name }}
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;">
+          {{ act.start | format_date }}
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;">
+          {{ act.finish | format_date }}
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;text-align:right;">
+          {% if act.is_milestone %}
+            <span style="color:var(--sk-muted);">—</span>
+          {% else %}
+            {{ act.duration_days }}d
+          {% endif %}
+        </td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;text-align:right;">
+          {% if act.float_days == 0 %}
+            <span style="color:var(--sk-fail);font-weight:600;">0d</span>
+          {% else %}
+            {{ act.float_days }}d
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+</div>
+
+{% endif %}<!-- /longest_path -->
+
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     DOCUMENT FOOTER (page 1 only — running footer handles subsequent pages)
+═══════════════════════════════════════════════════════════════════════════ -->
+<div class="doc-footer">
+  <span>SKOPIA Lens &nbsp;·&nbsp; Schedule Health Report &nbsp;·&nbsp; Confidential</span>
+  <span>Generated {{ generated_at }}</span>
+</div>
+
+</body>
+</html>

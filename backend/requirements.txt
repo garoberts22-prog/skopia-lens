@@ -1,0 +1,21 @@
+# SKOPIA Lens — Python Dependencies (v0.7)
+
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# XER + MPP parsing via MPXJ (LGPL — safe for commercial SaaS)
+# xerparser (GPL-3.0) removed — MPXJ handles both XER and MPP via UniversalProjectReader
+mpxj>=13.5.0
+jpype1>=1.5.0
+
+# PDF generation (Phase 3)
+weasyprint>=62.0
+jinja2>=3.0
+
+# Database (Phase 3)
+# supabase>=2.0.0
+
+# Payments (Phase 3)
+# stripe>=10.0.0
