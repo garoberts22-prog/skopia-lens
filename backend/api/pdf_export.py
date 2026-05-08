@@ -187,7 +187,8 @@ def _render_pdf(analysis: dict) -> bytes:
 
     # ── Build template context ────────────────────────────────────────────────
     grade   = str(analysis.get("overall_grade", "?"))
-    score   = round(float(analysis.get("overall_score", 0)), 1)
+    raw_score = analysis.get("overall_score")
+    score = round(float(raw_score or 0), 1)
 
     # Format data_date for display
     raw_dd = analysis.get("data_date") or ""
