@@ -1,26 +1,27 @@
 """
 # ╔══════════════════════════════════════════════════════╗
-# ║  SKOPIA Lens — main.py  v1.1  CLEAN BUILD           ║
-# ║  Verify: grep for /api/mpp-to-xer and _write_xer    ║
+# ║  SKOPIA Lens — main.py  v1.2  CLEAN BUILD           ║
+# ║  Verify: grep for /api/mpp-to-xml (no _write_xer)   ║
 # ╚══════════════════════════════════════════════════════╝
-SKOPIA Lens — FastAPI Application (v1.1)
+SKOPIA Lens — FastAPI Application (v1.2)
 
 Upload a schedule file (XER or MPP), get a health report card.
 Product: SKOPIA Lens — "Schedule confidence, in seconds."
 
 v0.8: Added schedule_data block (activities, wbs_nodes, relationships, calendars).
 v0.9: Fixed wbs_nodes reconstruction from wbs_path breadcrumbs.
-v1.0: Added /api/mpp-to-xml (MPXJ MSPDIWriter approach — retired).
-v1.1: Replaced /api/mpp-to-xml with /api/mpp-to-xer. MPP files are now
-      converted entirely server-side: MPPParserAdapter → ScheduleModel →
-      Python XER writer → XER bytes returned directly.
-      No MSP XML intermediary, no ByteArrayOutputStream, no JVM warmup polling.
-      The existing /api/analyse MPP parser is reused — same code path, proven
-      to work on Render. The XER writer (_write_xer) is pure Python.
+v1.0: Added /api/mpp-to-xml (MPXJ MSPDIWriter approach — first attempt, retired).
+v1.1: Replaced with /api/mpp-to-xer. MPP → ScheduleModel → Python _write_xer.
+v1.2: Simplified. Removed _write_xer (Python XER writer) entirely. Reverted to
+      MPXJ MSPDIWriter for /api/mpp-to-xml — returns MSP XML bytes to client.
+      Client then runs the existing convertMSPtoXER() from convertor.js.
+      This is architecturally identical to the xml2xer direction — consistent,
+      tested, and removes ~280 lines of duplicate serialisation logic.
 """
 
 from __future__ import annotations
 
+import io
 import os
 import tempfile
 from pathlib import Path
@@ -43,12 +44,12 @@ from api.pdf_export import router as pdf_router
 app = FastAPI(
     title="SKOPIA Lens API",
     description="Upload a P6 or MS Project schedule, get an instant health report card. SKOPIA Lens — schedule confidence, in seconds.",
-    version="1.0.0",
+    version="1.2.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[    
+    allow_origins=[
         "http://localhost:5173",
         "https://skopia-lens-frontend.onrender.com",
         "https://www.skopia.com.au",
@@ -66,16 +67,21 @@ PARSERS = [
 # Register PDF export endpoint
 app.include_router(pdf_router)
 
+
 @app.get("/")
 async def root():
     return {
         "service": "SKOPIA Lens",
-        "version": "1.0.0",
+        "version": "1.2.0",
         "tagline": "Schedule confidence, in seconds.",
         "supported_formats": [p.format_name for p in PARSERS],
         "supported_extensions": [ext for p in PARSERS for ext in p.supported_extensions],
     }
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Health check analysis endpoint
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/api/analyse")
 async def analyse_schedule(file: UploadFile = File(...)):
@@ -119,26 +125,35 @@ async def analyse_schedule(file: UploadFile = File(...)):
             pass
 
 
-@app.post("/api/mpp-to-xer")
-async def mpp_to_xer(file: UploadFile = File(...)):
+# ─────────────────────────────────────────────────────────────────────────────
+# MPP → MSP XML export endpoint  (v1.2 — replaces mpp-to-xer)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/api/mpp-to-xml")
+async def mpp_to_xml(file: UploadFile = File(...)):
     """
-    Convert a binary MS Project .mpp file directly to Primavera P6 XER format.
+    Convert a binary MS Project .mpp file to MSP XML format.
 
-    Architecture (v1.1 — replaces the /api/mpp-to-xml approach):
-      1. Read the .mpp via MPPParserAdapter → ScheduleModel.
-         This is the same parser used by /api/analyse — proven to work on Render.
-      2. Serialise the ScheduleModel to XER format using _write_xer() — a pure
-         Python function, no JVM involvement, no byte conversion issues.
-      3. Return XER bytes directly as text/plain for download.
+    Architecture (v1.2):
+      1. Read the .mpp into a temp file.
+      2. Use MPXJ's MSPDIWriter (already on the JVM from /api/analyse) to write
+         MSP XML into a Java StringWriter, then return the UTF-8 string as bytes.
+      3. The client receives standard MSP XML and runs convertMSPtoXER() from
+         convertor.js — identical to the xml2xer direction.
 
-    Why this is better than the old MPP→XML→client approach:
-      - No MPXJ MSPDIWriter involved — eliminates the ByteArrayOutputStream/
-        JPype byte[] conversion bug that caused the 0-byte responses.
-      - No XML intermediary — the client never needs to parse and re-convert.
-      - No JVM warmup polling — MPPParserAdapter already handles JVM startup
-        correctly (same as /api/analyse).
-      - Round-trip fidelity matches the XER→MSP XML path since both go through
-        the same ScheduleModel normalisation layer.
+    Why this is better than the old Python _write_xer approach (v1.1):
+      - No duplicate serialisation logic. convertor.js convertMSPtoXER() is
+        already tested and validated. No need for a parallel Python XER writer.
+      - MSPDIWriter produces the same MSP XML as "File > Save As > XML" in MSP,
+        which is exactly what convertMSPtoXER() was designed to consume.
+      - Consistent with xml2xer: same validator, same converter, same output.
+      - Removes ~280 lines of Python from main.py.
+
+    StringWriter vs ByteArrayOutputStream:
+      MSPDIWriter.write() writes to a Java Writer (character stream). We use
+      java.io.StringWriter — its toString() gives us a Python-safe UTF-8 string.
+      This avoids the JPype byte[] conversion bug that caused 0-byte responses
+      in the original /api/mpp-to-xml (v1.0) which used ByteArrayOutputStream.
     """
     filename = file.filename or "schedule.mpp"
 
@@ -155,16 +170,35 @@ async def mpp_to_xer(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        # Reuse the existing MPP parser — same code path as /api/analyse
-        parser = MPPParserAdapter()
-        model  = parser.parse(tmp_path, filename=filename)
-    except ParseError as e:
-        raise HTTPException(status_code=422, detail={
-            "error": "parse_error", "message": str(e), "details": e.details,
-        })
+        # Start JVM if not already running (MPPParserAdapter handles this too,
+        # so the JVM is shared — no double-start on a busy server).
+        import jpype
+        import mpxj as mpxj_pkg
+        if not jpype.isJVMStarted():
+            lib_dir = os.path.join(os.path.dirname(mpxj_pkg.__file__), "lib")
+            jars = [os.path.join(lib_dir, f) for f in os.listdir(lib_dir) if f.endswith(".jar")]
+            jpype.startJVM(classpath=jars) if jars else jpype.startJVM()
+        import jpype.imports
+
+        from org.mpxj.reader import UniversalProjectReader
+        from org.mpxj.writer import MSPDIWriter
+        from java.io import StringWriter
+
+        # Read the MPP file
+        reader  = UniversalProjectReader()
+        project = reader.read(tmp_path)
+
+        # Write to MSP XML via MSPDIWriter → StringWriter
+        # StringWriter is a character stream — toString() is safe from JPype.
+        sw = StringWriter()
+        writer = MSPDIWriter()
+        writer.write(project, sw)
+        xml_str = str(sw.toString())
+
     except Exception as e:
         raise HTTPException(status_code=500, detail={
-            "error": "parse_error", "message": f"Failed to read MPP: {e}",
+            "error": "conversion_error",
+            "message": f"MPP to XML conversion failed: {e}",
         })
     finally:
         try:
@@ -172,322 +206,20 @@ async def mpp_to_xer(file: UploadFile = File(...)):
         except OSError:
             pass
 
-    # Serialise ScheduleModel → XER (pure Python, no JVM)
-    try:
-        xer_bytes = _write_xer(model, filename)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail={
-            "error": "serialisation_error",
-            "message": f"XER serialisation failed: {e}",
-        })
-
     stem        = Path(filename).stem
-    out_filename = f"{stem}_converted.xer"
+    out_filename = f"{stem}.xml"
+    xml_bytes   = xml_str.encode("utf-8")
 
     return Response(
-        content=xer_bytes,
-        media_type="text/plain; charset=windows-1252",
+        content=xml_bytes,
+        media_type="application/xml; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
     )
 
 
-def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes:
-    """
-    Serialise a ScheduleModel to Primavera P6 XER format (bytes, Windows-1252).
-
-    XER is a tab-delimited text format. Each table starts with %T <TableName>,
-    followed by %F <field list>, then %R <row> for each record.
-    The file ends with %E.
-
-    This function mirrors the logic in convertor.js convertMSPtoXER() but runs
-    server-side in Python, operating on the ScheduleModel rather than parsed
-    MSP XML. Field counts and ordering match P6 import expectations.
-
-    Limitations (same as the client-side converter):
-      - Cost data not included (no RSRC cost rates)
-      - Baselines not included
-      - Activity codes not included
-    """
-    from datetime import datetime, timezone
-
-    now_str  = datetime.now().strftime("%Y-%m-%d %H:%M")
-    proj_id  = "1"      # single-project XER always uses proj_id=1
-    guid     = _xer_guid()
-
-    # ── Date helpers ─────────────────────────────────────────────────────────
-    def p6dt(dt) -> str:
-        """Format a Python date/datetime as P6's 'YYYY-MM-DD HH:MM' string."""
-        if dt is None:
-            return ""
-        if hasattr(dt, "strftime"):
-            return dt.strftime("%Y-%m-%d %H:%M")
-        return str(dt)
-
-    def hrs(h) -> str:
-        """Format hours as a string, defaulting to 0."""
-        if h is None:
-            return "0"
-        return f"{float(h):.4f}"
-
-    # ── Constraint type mapping ───────────────────────────────────────────────
-    _CSTR_MAP = {
-        "ALAP":                  "CS_ALAP",
-        "FNLT":                  "CS_FNLT",
-        "FNET":                  "CS_FNET",
-        "SNLT":                  "CS_SNLT",
-        "SNET":                  "CS_SNET",
-        "MSO":                   "CS_MSO",
-        "MFO":                   "CS_MFO",
-        "NONE":                  "CS_ASAP",
-        "AS_SOON_AS_POSSIBLE":   "CS_ASAP",
-        "AS_LATE_AS_POSSIBLE":   "CS_ALAP",
-        "START_NO_EARLIER_THAN": "CS_SNET",
-        "START_NO_LATER_THAN":   "CS_SNLT",
-        "FINISH_NO_EARLIER_THAN":"CS_FNET",
-        "FINISH_NO_LATER_THAN":  "CS_FNLT",
-        "MUST_START_ON":         "CS_MSO",
-        "MUST_FINISH_ON":        "CS_MFO",
-    }
-
-    def cstr_type(ct) -> str:
-        if ct is None:
-            return "CS_ASAP"
-        key = ct.value if hasattr(ct, "value") else str(ct)
-        return _CSTR_MAP.get(key.upper(), "CS_ASAP")
-
-    # ── Activity type mapping ─────────────────────────────────────────────────
-    _ATYPE_MAP = {
-        "TASK":             "TT_Task",
-        "MILESTONE":        "TT_Mile",
-        "START_MILESTONE":  "TT_Mile",
-        "FINISH_MILESTONE": "TT_FinMile",
-        "LOE":              "TT_LOE",
-        "SUMMARY":          "TT_WBS",
-        "WBS_SUMMARY":      "TT_WBS",
-        "HAMMOCK":          "TT_Task",
-    }
-
-    def act_type(at) -> str:
-        if at is None:
-            return "TT_Task"
-        key = at.value if hasattr(at, "value") else str(at)
-        return _ATYPE_MAP.get(key.upper(), "TT_Task")
-
-    # ── Status mapping ────────────────────────────────────────────────────────
-    def task_status(act) -> str:
-        if act.actual_finish:
-            return "TK_Complete"
-        if act.actual_start:
-            return "TK_Active"
-        return "TK_NotStart"
-
-    # ── Relationship type mapping ─────────────────────────────────────────────
-    _REL_MAP = {
-        "FS": "PR_FS", "SS": "PR_SS", "FF": "PR_FF", "SF": "PR_SF",
-    }
-
-    def rel_type(rt) -> str:
-        key = rt.value if hasattr(rt, "value") else str(rt)
-        return _REL_MAP.get(key.upper(), "PR_FS")
-
-    # ── Assign integer IDs to WBS nodes and activities ───────────────────────
-    # XER requires integer PKs for relational joins.
-    wbs_nodes   = list(model.wbs_nodes) if model.wbs_nodes else []
-    activities  = [a for a in model.activities]
-    calendars   = list(model.calendars) if model.calendars else []
-    rels        = list(model.relationships) if model.relationships else []
-
-    # All ID maps store STRING values — Python str.join() requires all items to be str.
-    # Storing as str here avoids wrapping every lookup site.
-    wbs_id_map  = {str(w.id): str(i + 100)  for i, w in enumerate(wbs_nodes)}
-    act_id_map  = {str(a.id): str(i + 1000) for i, a in enumerate(activities)}
-    cal_id_map  = {str(c.id): str(i + 200)  for i, c in enumerate(calendars)}
-
-    # Default calendar — first calendar, or a fallback string ID
-    default_cal = cal_id_map[str(calendars[0].id)] if calendars else "200"
-
-    # ── Project start/finish ──────────────────────────────────────────────────
-    proj_start  = model.planned_start  or (activities[0].planned_start  if activities else None)
-    proj_finish = model.planned_finish or (activities[-1].planned_finish if activities else None)
-
-    lines = []
-    lines.append("ERMHDR	19.12	2023-01-01	Project	admin	Admin				1	0.0	")
-
-    # ── PROJECT table ─────────────────────────────────────────────────────────
-    stem = Path(source_filename).stem[:40]
-    lines.append("%T	PROJECT")
-    lines.append("%F	proj_id	ext_proj_id	proj_short_name	clndr_id	"
-                 "last_recalc_date	plan_start_date	plan_end_date	"
-                 "scd_end_date	act_start_date	act_end_date	"
-                 "orig_proj_id	guid	create_date	create_user	"
-                 "proj_url	proj_desc")
-    lines.append("%R	" + "	".join([
-        proj_id, stem, stem, str(default_cal),
-        now_str, p6dt(proj_start), p6dt(proj_finish),
-        p6dt(proj_finish), "", "",
-        "", guid, now_str, "ADMIN", "", "",
-    ]))
-
-    # ── CALENDAR table ────────────────────────────────────────────────────────
-    lines.append("%T	CALENDAR")
-    lines.append("%F	clndr_id	default_flag	clndr_name	proj_id	"
-                 "base_clndr_id	last_chng_date	day_hr_cnt	wk_hr_cnt	"
-                 "month_hr_cnt	clndr_type	clndr_data")
-
-    # Day index: 0=Sun,1=Mon...6=Sat. ScheduleModel working_days uses 0=Mon...6=Sun.
-    # Mapping: model 0→P6 2, 1→3, 2→4, 3→5, 4→6, 5→7, 6→1
-    _DAY_REMAP = {0: 2, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7, 6: 1}
-
-    for cal in calendars:
-        cid   = cal_id_map[str(cal.id)]   # already a string
-        is_df = "1" if cid == default_cal else "0"
-        hpd   = cal.hours_per_day if hasattr(cal, "hours_per_day") else 8.0
-        hpw   = hpd * len(cal.working_days) if cal.working_days else hpd * 5
-
-        # Build clndr_data — P6's compact calendar encoding
-        # Format: (d|WD|s|hh:mm|f|hh:mm)(d|WD|...) for each working day
-        # Exceptions omitted for simplicity (holiday support is future work)
-        working_p6 = sorted([_DAY_REMAP.get(d, d + 1) for d in (cal.working_days or [0,1,2,3,4])])
-        day_blocks = ""
-        for d in working_p6:
-            day_blocks += f"(d|{d})(s|08:00)(f|{int(hpd):02d}:{int((hpd%1)*60):02d})"
-        clndr_data = day_blocks if day_blocks else "(d|2)(s|08:00)(f|08:00)(d|3)(s|08:00)(f|08:00)(d|4)(s|08:00)(f|08:00)(d|5)(s|08:00)(f|08:00)(d|6)(s|08:00)(f|08:00)"
-
-        lines.append("%R	" + "	".join([
-            str(cid), is_df, cal.name or "Standard",
-            proj_id, "", now_str,
-            f"{hpd:.2f}", f"{hpw:.2f}", f"{hpd*20:.2f}",
-            "CA_Base", clndr_data,
-        ]))
-
-    # ── PROJWBS table ─────────────────────────────────────────────────────────
-    lines.append("%T	PROJWBS")
-    lines.append("%F	wbs_id	proj_id	obs_id	seq_num	status_code	"
-                 "wbs_short_name	wbs_name	phase_id	parent_wbs_id	"
-                 "ev_user_pct	ev_etc_user_value	original_cost	"
-                 "at_completion_cost	forecast_cost	indep_remain_total_cost	"
-                 "ann_dscnt_rate_pct	dscnt_period_type	indep_remain_work_qty	"
-                 "anticip_start_date	anticip_end_date	ev_compute_type	"
-                 "ev_etc_compute_type	guid	pv_qty_sum	ac_qty_sum	"
-                 "ev_qty_sum	summ_base_proj_id	path_flag	levl_code")
-
-    for w in wbs_nodes:
-        wid    = wbs_id_map[str(w.id)]
-        pid    = wbs_id_map.get(str(w.parent_id), "") if w.parent_id else ""
-        short  = _xer_safe((getattr(w, "short_name", None) or str(w.id))[:24])
-        name   = _xer_safe(w.name or str(w.id))
-        lines.append("%R	" + "	".join([
-            wid, proj_id, "", "", "WS_Open",
-            short, name, "", pid,
-            "", "", "0", "0", "0", "0",
-            "", "", "0", "", "", "EV_TL", "EV_TL",
-            _xer_guid(), "0", "0", "0", "", "N", "",
-        ]))
-
-    # ── TASK table ───────────────────────────────────────────────────────────
-    lines.append("%T	TASK")
-    lines.append("%F	task_id	proj_id	wbs_id	clndr_id	phys_complete_pct	"
-                 "rev_fdbk_flag	act_this_per_work_qty	act_ot_work_qty	"
-                 "target_start_date	target_end_date	act_start_date	"
-                 "act_end_date	target_dur_hr_cnt	rem_dur_hr_cnt	"
-                 "act_work_qty	remain_work_qty	target_work_qty	"
-                 "orig_task_id	at_compl_work_qty	name	task_type	"
-                 "duration_type	status_code	task_code	drive_type	"
-                 "status_reviewer	pct_complete_type	constraint_date	"
-                 "actual_drtn_hr_cnt	cstr_type	priority_num	suspend_date	"
-                 "resume_date	cstr_type2	cstr_date2	drtn_type	"
-                 "guid	template_guid	rsrc_id")
-
-    for act in activities:
-        tid      = act_id_map[str(act.id)]          # string from map
-        wid      = wbs_id_map.get(str(act.wbs_id), "") if act.wbs_id else ""
-        cid      = cal_id_map.get(str(act.calendar_id), default_cal) if act.calendar_id else default_cal
-        pct      = str(int(act.percent_complete or 0))
-        tstart   = p6dt(act.planned_start or act.early_start)
-        tfinish  = p6dt(act.planned_finish or act.early_finish)
-        astart   = p6dt(act.actual_start)
-        afinish  = p6dt(act.actual_finish)
-        odur     = hrs(act.original_duration_hours  or 0)
-        rdur     = hrs(act.remaining_duration_hours or 0)
-        cdt      = p6dt(act.constraint_date)
-        atype    = act_type(act.activity_type)
-        status   = task_status(act)
-        ctype    = cstr_type(act.constraint_type)
-        code     = _xer_safe(act.id)[:40]
-        name     = _xer_safe(act.name or "")
-
-        lines.append("%R	" + "	".join([
-            tid, proj_id, wid, cid, pct,
-            "N", "0", "0",
-            tstart, tfinish, astart, afinish,
-            odur, rdur, "0", rdur, odur,
-            "", "0",
-            name, atype, "DT_FixedDrtn", status, code,
-            "DT_Cpm", "", "PC_TotalPct",
-            cdt, "0", ctype, "500", "", "",
-            "CS_ASAP", "", "DT_FixedDrtn",
-            _xer_guid(), "", "",
-        ]))
-
-    # ── TASKPRED table ────────────────────────────────────────────────────────
-    lines.append("%T	TASKPRED")
-    lines.append("%F	task_pred_id	task_id	pred_task_id	proj_id	"
-                 "pred_proj_id	pred_type	lag_hr_cnt	comments	"
-                 "float_path	aref	arls")
-
-    pred_id = 5000
-    for rel in rels:
-        succ_int = act_id_map.get(str(rel.successor_id))
-        pred_int = act_id_map.get(str(rel.predecessor_id))
-        if not succ_int or not pred_int:
-            continue   # skip orphaned relationships
-        lag = hrs(rel.lag_hours or 0)
-        lines.append("%R	" + "	".join([
-            str(pred_id), succ_int, pred_int,
-            proj_id, proj_id,
-            rel_type(rel.type), lag,
-            "", "", "", "",
-        ]))
-        pred_id += 1
-
-    # ── SCHEDOPTIONS table ───────────────────────────────────────────────────
-    lines.append("%T	SCHEDOPTIONS")
-    lines.append("%F	schedoptions_id	proj_id	sched_type	sched_calendar_on_relationship_lag	"
-                 "sched_open_critical_flag	use_total_float_multiple_longest_path	"
-                 "enable_multiple_longest_paths_generation	"
-                 "number_longest_paths	sched_use_expect_end_flag	"
-                 "sched_lag_early_start_flag	sched_retained_logic	"
-                 "sched_setplantoforecast	sched_float_type	sched_calendar_on_relationship_lag2	"
-                 "sched_progress_override")
-    lines.append("%R	" + "	".join([
-        "1", proj_id, "SE_SCHEDULE", "Y", "N", "N", "N",
-        "1", "N", "Y", "Y", "N", "total_float", "Y", "N",
-    ]))
-
-    lines.append("%E")
-
-    raw = "\n".join(lines) + "\n"
-    return raw.encode("windows-1252", errors="replace")
-
-
-def _xer_safe(s: str) -> str:
-    """Strip tab and newline characters — they would break XER field parsing."""
-    if not s:
-        return ""
-    return str(s).replace("\t", " ").replace("\n", " ").replace("\r", "")
-
-
-def _xer_guid() -> str:
-    """Generate a random GUID string in P6 format (no braces, uppercase)."""
-    import uuid
-    return str(uuid.uuid4()).upper()
-
-
-
-
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # Serialisation helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _dt_iso(val) -> str | None:
     if val is None:
@@ -538,9 +270,9 @@ def _constraint_code(ctype: ConstraintType) -> str | None:
     return ctype.value
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # WBS reconstruction — v0.9
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _build_wbs_nodes(model: ScheduleModel) -> list[dict]:
     """
@@ -597,19 +329,13 @@ def _build_wbs_nodes(model: ScheduleModel) -> list[dict]:
             level_offset = depth_cache[root_id]  # subtract root depth from all
 
         # Filter: only keep nodes with meaningful names (at least one letter).
-        # The parser may expand dot-notation IDs into intermediate nodes
-        # like "1", "2" that aren't real WBS packages from the PROJWBS table.
         def has_real_name(w):
             name = w.name or ""
-            # A name is "real" if it contains at least one letter
             return any(c.isalpha() for c in name)
 
         real_nodes = {str(w.id) for w in model.wbs_nodes if has_real_name(w)}
-
-        # Also keep the root so we can calculate depths, even though we'll exclude it later
         real_nodes |= roots
 
-        # For nodes we're removing, reparent their children to the nearest real ancestor
         def find_real_ancestor(wid):
             """Walk up the parent chain until we find a node in real_nodes."""
             cur = parent_map.get(wid)
@@ -641,14 +367,11 @@ def _build_wbs_nodes(model: ScheduleModel) -> list[dict]:
         for wid in real_nodes:
             get_real_depth(wid)
 
-        # No level offset — display levels match P6 actual depth.
-        # Root node is L1, its children L2, etc.
         level_offset = 0
 
         # Find which real WBS nodes are needed (referenced by activities + ancestors)
         referenced = {str(a.wbs_id) for a in model.activities if a.wbs_id}
 
-        # Map each activity's wbs_id to its nearest real WBS ancestor
         act_to_real_wbs = {}
         for wid in referenced:
             if wid in real_nodes:
@@ -669,9 +392,6 @@ def _build_wbs_nodes(model: ScheduleModel) -> list[dict]:
             if wid:
                 needed |= get_real_ancestors(wid)
 
-        # Keep root in display — it is a real named WBS node (e.g. project name band)
-        # needed -= roots  ← removed: was hiding top-level WBS band
-
         nodes = []
         for w in model.wbs_nodes:
             wid = str(w.id)
@@ -680,8 +400,6 @@ def _build_wbs_nodes(model: ScheduleModel) -> list[dict]:
             raw_depth = depth_cache.get(wid, 1)
             display_level = raw_depth - level_offset
             pid = real_parent_map.get(wid)
-            # Root is a valid display node — don't clear parent pointer
-            # if pid in roots: pid = None  ← removed
             nodes.append({
                 "id":     wid,
                 "name":   w.name or wid,
@@ -691,7 +409,6 @@ def _build_wbs_nodes(model: ScheduleModel) -> list[dict]:
             })
 
         if nodes:
-            # Return nodes + the activity-to-real-WBS mapping
             return nodes, act_to_real_wbs
 
     # ── Fallback: reconstruct from wbs_path breadcrumbs ─────────────────────
@@ -727,23 +444,19 @@ def _build_wbs_nodes(model: ScheduleModel) -> list[dict]:
                 "code":   node_id,
             }
 
-    # No remapping needed for fallback — activities keep their original wbs_id
     return list(node_map.values()), {}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # schedule_data serialiser
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _serialise_schedule_data(model: ScheduleModel) -> dict:
     """Build the schedule_data block for the API response."""
 
-    # Build WBS nodes + activity→real_wbs mapping
     wbs_nodes, act_wbs_remap = _build_wbs_nodes(model)
     wbs_name_map = {w["id"]: w["name"] for w in wbs_nodes}
     wbs_id_set   = {w["id"] for w in wbs_nodes}
-
-    # ── DEBUG ────────────────────────────────────────────────────────────────
 
     # ── Activities ──────────────────────────────────────────────────────────
     activities = []
@@ -763,10 +476,8 @@ def _serialise_schedule_data(model: ScheduleModel) -> dict:
         if not is_critical and a.total_float_hours is not None:
             is_critical = a.total_float_hours <= 0
 
-        # Map the activity to its nearest real WBS node
-        raw_wbs = str(a.wbs_id)
+        raw_wbs  = str(a.wbs_id)
         real_wbs = act_wbs_remap.get(raw_wbs, raw_wbs)
-        # If remapped WBS isn't in the node set, use the raw one
         if real_wbs and real_wbs not in wbs_id_set:
             real_wbs = raw_wbs
 
@@ -776,8 +487,8 @@ def _serialise_schedule_data(model: ScheduleModel) -> dict:
             "id":          a.id,
             "name":        a.name,
             "wbs":         real_wbs,
-            "wbs_name":    wbs_display,   # friendly name from WBS node
-            "wbs_path":    a.wbs_path,    # full breadcrumb for tooltip
+            "wbs_name":    wbs_display,
+            "wbs_path":    a.wbs_path,
             "start":       _dt_iso(start),
             "finish":      _dt_iso(finish),
             "exp_finish":  _dt_iso(getattr(a, 'exp_finish', None)),
@@ -797,17 +508,12 @@ def _serialise_schedule_data(model: ScheduleModel) -> dict:
             "calendar":    cal_name,
             "cal_id":      a.calendar_id,
             "critical":    is_critical,
-            # ── Resources & Units ───────────────────────────────────────────
-            # Set by parsers as dynamic attributes; default to None if absent.
-            # Units stored as hours in the parser, converted to whole-number days
-            # here for display consistency with duration columns.
             "resource_id":      getattr(a, 'resource_id',   None) or None,
             "resource_name":    getattr(a, 'resource_name', None) or None,
             "budget_units":     _hours_to_days(getattr(a, 'budget_units_hours',    None)),
             "actual_units":     _hours_to_days(getattr(a, 'actual_units_hours',    None)),
             "remaining_units":  _hours_to_days(getattr(a, 'remaining_units_hours', None)),
             "at_comp_units":    _hours_to_days(getattr(a, 'at_comp_units_hours',   None)),
-            # var_budget_units computed frontend-side from budget_units - at_comp_units
         })
 
     # ── Relationships ────────────────────────────────────────────────────────
@@ -850,9 +556,9 @@ def _serialise_schedule_data(model: ScheduleModel) -> dict:
     }
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # Report serialiser
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 def _serialise_report(report: HealthReport, model: ScheduleModel) -> dict:
     """Convert HealthReport + ScheduleModel to JSON-serialisable dict."""
