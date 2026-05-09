@@ -1,8 +1,8 @@
 /**
- * SKOPIA Schedule Convertor — Conversion Logic (v0.2)
+ * SKOPIA Schedule Convertor — Conversion Logic (v0.3)
  *
- * Pure utility functions extracted from schedule-convertor.html.
- * No DOM references, no React, no side effects — safe to import anywhere.
+ * Pure utility functions. No DOM references, no React, no side effects.
+ * Safe to import anywhere.
  *
  * v0.2 additions:
  *   - Resource/assignment conversion in both directions
@@ -13,17 +13,28 @@
  *   - Validation updated to report resource/assignment counts
  *   - Summary metrics updated in both converters
  *
+ * v0.3 change:
+ *   - No logic changes. Updated documentation only.
+ *   - The mpp2xer direction is now handled entirely client-side:
+ *       1. ConvertView POSTs the .mpp to /api/mpp-to-xml (FastAPI).
+ *       2. The server uses MPXJ MSPDIWriter to return standard MSP XML bytes.
+ *       3. ConvertView passes those bytes to validateMSPXML() + convertMSPtoXER()
+ *          — identical to the xml2xer direction. No separate code path.
+ *   - /api/mpp-to-xer and the Python _write_xer function have been removed from
+ *     main.py. This module has no awareness of which direction triggered it.
+ *
  * CRITICAL: The NM_* tag constants MUST be defined via string concatenation.
  * If '<Name>' appears as a raw string literal inside a script block, the HTML
  * parser consumes the tag before JS executes, leaving an empty string. The same
  * risk exists in JSX template literals. Always build via concatenation.
  * NM_CDATA_O is also used for resource <Name> elements in the MSP XML output.
  *
- * This module is 100% client-side. It has NO interaction with the FastAPI
- * backend — the convertor runs entirely in the browser and is compatible with
- * the backend parsers (xer_adapter_mpxj.py, mpp_adapter.py) which operate on
- * the /api/analyse endpoint only.
+ * This module is 100% client-side. Conversion logic has NO interaction with
+ * the FastAPI backend. The backend is only used to decode the binary .mpp
+ * format — it returns MSP XML bytes, and this module converts those bytes
+ * to XER using the same convertMSPtoXER() function as the xml2xer direction.
  */
+
 
 // ── XML name tag constants ────────────────────────────────────────────────────
 // Constructed via concatenation — never raw string literals.
