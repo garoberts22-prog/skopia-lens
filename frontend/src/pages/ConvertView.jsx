@@ -92,19 +92,13 @@ const STAGES_MSP = [
   'Generating XER…',
   'Encoding output…',
 ]
-// MPP → XER stage labels (hybrid: server converts MPP→XML, then client runs xml2xer)
+// MPP → XER stage labels (server converts MPP→XER directly, no XML intermediary)
 const STAGES_MPP = [
-  'Waking server…',
   'Uploading MPP to server…',
-  'Reading binary file (MPXJ)…',
-  'Converting to MSP XML…',
-  'Validating XML output…',
-  'Filtering calendars…',
-  'Reconstructing WBS…',
-  'Converting tasks…',
-  'Mapping relationships…',
-  'Generating XER…',
-  'Encoding output…',
+  'Parsing MPP (MPXJ)…',
+  'Building schedule model…',
+  'Writing XER output…',
+  'Receiving XER file…',
 ]
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -231,75 +225,28 @@ export default function ConvertView() {
   }
 
   /**
-   * handleMppUpload — POSTs the .mpp to /api/mpp-to-xml, stores the
-   * returned XML bytes, then validates them client-side as MSP XML.
+   * handleMppUpload — POSTs the .mpp to /api/mpp-to-xer and receives XER bytes.
    *
-   * Uses step 3 (progress bar) while the server processes, then steps
-   * back to 2 (validation) once XML is received — transparent to the user.
-   * On fetch failure stays on step 3 showing the error; Back button resets.
+   * v1.1 architecture: the backend reads MPP via MPPParserAdapter → ScheduleModel
+   * → pure Python XER writer. We receive XER directly — no XML intermediary,
+   * no JVM warmup polling, no client-side conversion step for mpp2xer.
+   *
+   * On success: jumps straight to step 4 (Download). The backend already
+   * parsed and validated the schedule — no client-side validation needed.
    */
-  /**
-   * checkServerReady — polls /api/warmup until the JVM is confirmed ready.
-   *
-   * Render free tier spins down after inactivity. On cold-start the container
-   * can take 50+ seconds to wake AND the JVM needs additional time to initialise
-   * on top of that. Polling here means the user sees a live countdown rather
-   * than a silent failure, and we don't hit /api/mpp-to-xml until the JVM
-   * is actually ready.
-   *
-   * Strategy: poll every 3 seconds for up to 90 seconds. Each failed attempt
-   * updates the progress label with elapsed time so the user knows it's working.
-   */
-  async function checkServerReady() {
-    const MAX_WAIT_MS  = 90_000   // 90 seconds max — free tier can be slow
-    const POLL_MS      = 3_000    // check every 3 seconds
-    const started      = Date.now()
-
-    while (Date.now() - started < MAX_WAIT_MS) {
-      try {
-        const r = await fetch(`${API_BASE}/api/warmup`, { method: 'GET' })
-        if (r.ok) {
-          const body = await r.json()
-          if (body.jvm_ready) return true   // JVM confirmed ready
-        }
-      } catch (_) {
-        // Network error — container still waking, keep polling
-      }
-      const elapsed = Math.round((Date.now() - started) / 1000)
-      setProgStatus(`Waking server… (${elapsed}s) — Java runtime starting`)
-      await new Promise(r => setTimeout(r, POLL_MS))
-    }
-    return false   // timed out
-  }
-
   async function handleMppUpload(f) {
     setStep(3)
-    setProgress(5)
-    setProgStatus('Waking server…')
-
-    // ── Step 1: Wait for JVM to be ready ─────────────────────────────────────
-    // This resolves the Render free-tier cold-start problem: the JVM needs time
-    // to initialise after the container wakes. We poll /api/warmup rather than
-    // hitting /api/mpp-to-xml immediately, which previously returned 0 bytes.
-    const ready = await checkServerReady()
-    if (!ready) {
-      setProgStatus('Server did not respond in time. Please try again.')
-      setProgress(0)
-      return
-    }
-
-    setProgress(15)
+    setProgress(10)
     setProgStatus('Uploading MPP to server…')
 
     const formData = new FormData()
     formData.append('file', f)
 
-    let xmlBytes
     try {
       setProgress(30)
-      setProgStatus('Reading binary file (MPXJ)…')
+      setProgStatus('Converting MPP → XER (server-side)…')
 
-      const resp = await fetch(`${API_BASE}/api/mpp-to-xml`, {
+      const resp = await fetch(`${API_BASE}/api/mpp-to-xer`, {
         method: 'POST',
         body:   formData,
       })
@@ -309,48 +256,47 @@ export default function ConvertView() {
       if (!resp.ok) {
         let msg = `Server error ${resp.status}`
         try {
-          const errText = await resp.text()
-          console.error('[mpp2xer] error body:', errText)
-          const err = JSON.parse(errText)
+          const err = await resp.json()
           msg = err.detail?.message || err.message || msg
         } catch (_) { /* keep default */ }
         throw new Error(msg)
       }
 
-      setProgress(60)
-      setProgStatus('Received MSP XML — validating…')
+      setProgress(80)
+      setProgStatus('Receiving XER file…')
 
       const arrayBuf = await resp.arrayBuffer()
       console.log('[mpp2xer] received bytes:', arrayBuf.byteLength)
 
       if (arrayBuf.byteLength === 0) {
-        throw new Error('Server returned 0 bytes after JVM was confirmed ready. Check Render backend logs.')
+        throw new Error('Server returned 0 bytes — check Render backend logs.')
       }
 
-      // Sniff first bytes — must be XML, not an error page
-      const sniff = new TextDecoder('utf-8').decode(arrayBuf.slice(0, 100))
-      console.log('[mpp2xer] body start:', JSON.stringify(sniff.substring(0, 60)))
-      if (!sniff.includes('<?xml') && !sniff.includes('<Project')) {
-        throw new Error('Server returned unexpected content (not XML). Preview: ' + sniff.substring(0, 80))
+      // Sniff XER header — must start with ERMHDR
+      const sniff = new TextDecoder('ascii', { fatal: false }).decode(arrayBuf.slice(0, 10))
+      if (!sniff.startsWith('ERMHDR')) {
+        throw new Error('Unexpected response (not XER). Preview: ' + sniff.substring(0, 60))
       }
 
-      xmlBytes = new Uint8Array(arrayBuf)
+      setProgress(100)
+      setProgStatus('Complete!')
+
+      const blob    = new Blob([new Uint8Array(arrayBuf)], { type: 'text/plain' })
+      const outName = f.name.replace(/\.mpp$/i, '') + '_converted.xer'
+      setResultBlob(blob)
+      setResultName(outName)
+      setSummary({ 'Source format': 'MPP', 'Output format': 'XER', 'Conversion': 'Server-side' })
+
+      await new Promise(r => setTimeout(r, 400))
+      setStep(4)
 
     } catch (err) {
       setProgStatus('Upload failed: ' + err.message)
       setProgress(0)
-      console.error('[mpp2xer] upload error:', err)
-      return
+      console.error('[mpp2xer] error:', err)
     }
-
-    setMppXmlBytes(xmlBytes)
-    setFileBytes(xmlBytes)
-
-    await new Promise(r => setTimeout(r, 80))  // yield so progress bar updates
-
-    setStep(2)
-    runValidationFromBytes(xmlBytes, f.name.replace(/\.mpp$/i, '.xml'))
   }
+
 
   // ── Validation ──────────────────────────────────────────────────────────────
   /**
