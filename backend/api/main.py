@@ -123,7 +123,7 @@ async def mpp_to_xml(file: UploadFile = File(...)):
     Used by ConvertView's mpp2xer direction:
       1. Frontend POSTs the .mpp file here.
       2. This endpoint reads it via MPXJ UniversalProjectReader and writes
-         MSP XML via MSPDIWriter into a ByteArrayOutputStream.
+         MSP XML via MSPDIWriter (writes to temp file, read back as bytes),
       3. Returns the XML bytes as application/xml for direct download or
          for the client-side xml2xer converter to consume as the next step.
 
@@ -183,21 +183,24 @@ def _convert_mpp_to_xml_bytes(mpp_path: str) -> bytes:
     """
     Read an MPP file via MPXJ and serialise it to MSP XML bytes.
 
-    Uses MSPDIWriter.write(ProjectFile, OutputStream) — the in-memory stream
-    variant. No intermediate file is written; the XML is captured in a
-    Java ByteArrayOutputStream and returned as Python bytes.
+    WHY TEMP FILE, NOT ByteArrayOutputStream:
+    The original implementation used ByteArrayOutputStream and converted the
+    returned Java byte[] to Python bytes via iteration:
+        bytes([int(b) & 0xFF for b in baos.toByteArray()])
+    This works in local testing but fails on some JVM/JPype/platform combinations
+    (confirmed on Render) — the iterator over a Java byte[] returns zero items
+    for large arrays, producing an empty bytes object and a silent 200 response.
 
-    JVM startup: delegates to _ensure_jvm(), which mirrors the pattern in
-    xer_adapter_mpxj._start_jvm() — checks isJVMStarted() before calling
-    startJVM() so repeated calls are safe.
+    The fix: write to a temp file using MSPDIWriter.write(ProjectFile, String),
+    then read the file back as Python bytes. No JPype type conversion needed —
+    Python's open() reads the file natively. The temp file is always deleted in
+    the finally block regardless of outcome.
     """
     _ensure_jvm()
 
-    # These imports are safe after _ensure_jvm() has run
     import jpype.imports
     from org.mpxj.reader import UniversalProjectReader
     from org.mpxj.mspdi  import MSPDIWriter
-    from java.io          import ByteArrayOutputStream
 
     # Read the MPP
     try:
@@ -211,17 +214,33 @@ def _convert_mpp_to_xml_bytes(mpp_path: str) -> bytes:
                        "Password-protected files are not supported.",
         })
 
-    # Write to an in-memory stream — no temp file needed
-    writer = MSPDIWriter()
-    writer.setMicrosoftProjectCompatibleOutput(True)   # MSP-compatible namespace + encoding
+    # Write XML to a temp file — avoids JPype byte[] iteration entirely
+    xml_tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as f:
+            xml_tmp = f.name
 
-    baos = ByteArrayOutputStream()
-    writer.write(project, baos)
+        writer = MSPDIWriter()
+        writer.setMicrosoftProjectCompatibleOutput(True)
+        writer.write(project, xml_tmp)   # write(ProjectFile, String path)
 
-    # Convert Java byte[] to Python bytes.
-    # Java signed bytes: values -128..127. & 0xFF maps to 0..255.
-    java_bytes = baos.toByteArray()
-    return bytes([int(b) & 0xFF for b in java_bytes])
+        xml_bytes = Path(xml_tmp).read_bytes()
+
+        if not xml_bytes:
+            raise HTTPException(status_code=500, detail={
+                "error":   "empty_output",
+                "message": "MSPDIWriter produced an empty XML file.",
+                "details": "The MPP file may be corrupt or contain no tasks.",
+            })
+
+        return xml_bytes
+
+    finally:
+        if xml_tmp:
+            try:
+                os.unlink(xml_tmp)
+            except OSError:
+                pass
 
 
 def _ensure_jvm() -> None:
