@@ -25,7 +25,7 @@ import { uploadSchedule } from '../api'
 // Each stage gets a label and a rough % to animate the progress bar.
 const STAGES = [
   { key: 'uploading', label: 'Uploading file…',          pct: 15 },
-  { key: 'parsing',   label: 'Parsing schedule…',        pct: 40 },
+  { key: 'parsing',   label: 'Loading Schedule…',        pct: 40 },
   { key: 'checking',  label: 'Running health checks…',   pct: 70 },
   { key: 'building',  label: 'Building analytics…',      pct: 90 },
 ]
