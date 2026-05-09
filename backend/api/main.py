@@ -297,12 +297,14 @@ def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes
     calendars   = list(model.calendars) if model.calendars else []
     rels        = list(model.relationships) if model.relationships else []
 
-    wbs_id_map  = {str(w.id): (i + 100) for i, w in enumerate(wbs_nodes)}
-    act_id_map  = {str(a.id): (i + 1000) for i, a in enumerate(activities)}
-    cal_id_map  = {str(c.id): (i + 200) for i, c in enumerate(calendars)}
+    # All ID maps store STRING values — Python str.join() requires all items to be str.
+    # Storing as str here avoids wrapping every lookup site.
+    wbs_id_map  = {str(w.id): str(i + 100)  for i, w in enumerate(wbs_nodes)}
+    act_id_map  = {str(a.id): str(i + 1000) for i, a in enumerate(activities)}
+    cal_id_map  = {str(c.id): str(i + 200)  for i, c in enumerate(calendars)}
 
-    # Default calendar — first calendar, or a fallback ID
-    default_cal = cal_id_map[str(calendars[0].id)] if calendars else 200
+    # Default calendar — first calendar, or a fallback string ID
+    default_cal = cal_id_map[str(calendars[0].id)] if calendars else "200"
 
     # ── Project start/finish ──────────────────────────────────────────────────
     proj_start  = model.planned_start  or (activities[0].planned_start  if activities else None)
@@ -337,7 +339,7 @@ def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes
     _DAY_REMAP = {0: 2, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7, 6: 1}
 
     for cal in calendars:
-        cid   = cal_id_map[str(cal.id)]
+        cid   = cal_id_map[str(cal.id)]   # already a string
         is_df = "1" if cid == default_cal else "0"
         hpd   = cal.hours_per_day if hasattr(cal, "hours_per_day") else 8.0
         hpw   = hpd * len(cal.working_days) if cal.working_days else hpd * 5
@@ -375,8 +377,8 @@ def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes
         short  = _xer_safe((getattr(w, "short_name", None) or str(w.id))[:24])
         name   = _xer_safe(w.name or str(w.id))
         lines.append("%R	" + "	".join([
-            str(wid), proj_id, "", "", "WS_Open",
-            short, name, "", str(pid),
+            wid, proj_id, "", "", "WS_Open",
+            short, name, "", pid,
             "", "", "0", "0", "0", "0",
             "", "", "0", "", "", "EV_TL", "EV_TL",
             _xer_guid(), "0", "0", "0", "", "N", "",
@@ -397,9 +399,9 @@ def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes
                  "guid	template_guid	rsrc_id")
 
     for act in activities:
-        tid      = act_id_map[str(act.id)]
+        tid      = act_id_map[str(act.id)]          # string from map
         wid      = wbs_id_map.get(str(act.wbs_id), "") if act.wbs_id else ""
-        cid      = cal_id_map.get(str(act.calendar_id), str(default_cal)) if act.calendar_id else str(default_cal)
+        cid      = cal_id_map.get(str(act.calendar_id), default_cal) if act.calendar_id else default_cal
         pct      = str(int(act.percent_complete or 0))
         tstart   = p6dt(act.planned_start or act.early_start)
         tfinish  = p6dt(act.planned_finish or act.early_finish)
@@ -415,7 +417,7 @@ def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes
         name     = _xer_safe(act.name or "")
 
         lines.append("%R	" + "	".join([
-            str(tid), proj_id, str(wid), cid, pct,
+            tid, proj_id, wid, cid, pct,
             "N", "0", "0",
             tstart, tfinish, astart, afinish,
             odur, rdur, "0", rdur, odur,
@@ -441,7 +443,7 @@ def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes
             continue   # skip orphaned relationships
         lag = hrs(rel.lag_hours or 0)
         lines.append("%R	" + "	".join([
-            str(pred_id), str(succ_int), str(pred_int),
+            str(pred_id), succ_int, pred_int,
             proj_id, proj_id,
             rel_type(rel.type), lag,
             "", "", "", "",
