@@ -1,13 +1,23 @@
 /**
- * SKOPIA Schedule Convertor — Conversion Logic (v0.1)
+ * SKOPIA Schedule Convertor — Conversion Logic (v0.2)
  *
  * Pure utility functions extracted from schedule-convertor.html.
  * No DOM references, no React, no side effects — safe to import anywhere.
+ *
+ * v0.2 additions:
+ *   - Resource/assignment conversion in both directions
+ *     XER→MSP: <Resources> + <Assignments> blocks (RSRC/TASKRSRC tables)
+ *     MSP→XER: RSRC, RSRCRATE, TASKRSRC tables
+ *   - parseMSPXML() now returns resources[] and assignments[]
+ *   - parseXER() now extracts RSRC and TASKRSRC tables
+ *   - Validation updated to report resource/assignment counts
+ *   - Summary metrics updated in both converters
  *
  * CRITICAL: The NM_* tag constants MUST be defined via string concatenation.
  * If '<Name>' appears as a raw string literal inside a script block, the HTML
  * parser consumes the tag before JS executes, leaving an empty string. The same
  * risk exists in JSX template literals. Always build via concatenation.
+ * NM_CDATA_O is also used for resource <Name> elements in the MSP XML output.
  *
  * This module is 100% client-side. It has NO interaction with the FastAPI
  * backend — the convertor runs entirely in the browser and is compatible with
@@ -145,6 +155,35 @@ export function parseISODuration(s) {
   return m ? (parseFloat(m[1] || 0) + parseFloat(m[2] || 0) / 60 + parseFloat(m[3] || 0) / 3600) : 0;
 }
 
+/**
+ * Parse an ISO work-duration string (PT14H4M0S) to decimal hours.
+ *
+ * WHY this exists alongside parseISODuration: MSP assignment Work fields use
+ * integer H and M components (PT14H4M0S = 14h 4m = 14.0667h). parseISODuration
+ * above uses parseFloat on each group and works for task durations. This version
+ * uses parseInt to match the H+M/60 semantics required by Skill §10.
+ * Using parseFloat on M (e.g. "4" → 4.0/60 vs "04" → 4.0/60) gives the same
+ * result numerically, but parseInt is explicit about intent here.
+ */
+export function parseWorkHrs(s) {
+  if (!s || s === 'PT0H0M0S') return 0;
+  const m = s.match(/PT(\d+)H(\d+)M(\d+)S/);
+  if (!m) return 0;
+  return parseInt(m[1]) + parseInt(m[2]) / 60 + parseInt(m[3]) / 3600;
+}
+
+/**
+ * Convert decimal hours to an ISO duration string for MSP XML Work fields.
+ * Output: PTxHyM0S where x and y are integers.
+ * e.g. 14.0667 → PT14H4M0S
+ */
+export function toWork(hrs) {
+  const h = Math.floor(hrs);
+  let   m = Math.round((hrs - h) * 60);
+  if (m === 60) { return 'PT' + (h + 1) + 'H0M0S'; }
+  return 'PT' + h + 'H' + m + 'M0S';
+}
+
 export function formatBytes(b) {
   if (b < 1024) return b + ' B';
   if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
@@ -211,6 +250,14 @@ export function parseXER(bytes) {
 /**
  * Parse a Microsoft Project XML (.xml) file from raw bytes.
  * MSP XML is UTF-8 — TextDecoder is safe here (unlike XER).
+ *
+ * DUAL NAMESPACE: P6's built-in XML export uses namespace
+ * http://schemas.microsoft.com/project/2007 while our tool generates
+ * http://schemas.microsoft.com/project. getElementsByTagName() is
+ * namespace-agnostic in browsers — always use it. Do NOT use
+ * querySelectorAll() with element names — it fails on the /2007 namespace.
+ *
+ * Returns: { project, calendars[], tasks[], resources[], assignments[] }
  */
 export function parseMSPXML(bytes) {
   const text = new TextDecoder('utf-8').decode(bytes);
@@ -221,12 +268,13 @@ export function parseMSPXML(bytes) {
   const root = doc.documentElement;
   if (root.localName !== 'Project') return { error: 'Not a valid MSP XML file — root element is <' + root.localName + '>' };
 
+  // getElementsByTagName is namespace-agnostic — safe for both MSP namespaces
   function txt(parent, tag) {
     const el = parent.getElementsByTagName(tag)[0];
     return el ? el.textContent.trim() : '';
   }
 
-  const result = { project: {}, calendars: [], tasks: [] };
+  const result = { project: {}, calendars: [], tasks: [], resources: [], assignments: [] };
   result.project.name       = txt(root, 'Name') || txt(root, 'Title') || 'Converted Project';
   result.project.startDate  = txt(root, 'StartDate');
   result.project.finishDate = txt(root, 'FinishDate');
@@ -234,7 +282,8 @@ export function parseMSPXML(bytes) {
   result.project.minPerDay  = parseInt(txt(root, 'MinutesPerDay'))  || 480;
   result.project.minPerWeek = parseInt(txt(root, 'MinutesPerWeek')) || 2400;
 
-  // Calendars — skip nested Calendar elements (only top-level)
+  // ── Calendars ────────────────────────────────────────────────────────────
+  // Skip nested Calendar elements (resource calendars nest inside base ones)
   const calEls = root.getElementsByTagName('Calendar');
   for (let ci = 0; ci < calEls.length; ci++) {
     const ce = calEls[ci];
@@ -243,6 +292,7 @@ export function parseMSPXML(bytes) {
       uid: parseInt(txt(ce, 'UID')) || 0,
       name: txt(ce, 'Name'),
       isBase: txt(ce, 'IsBaseCalendar') === '1',
+      baseCalendarUID: parseInt(txt(ce, 'BaseCalendarUID')) || -1,
       weekDays: [],
       exceptions: [],
     };
@@ -279,10 +329,14 @@ export function parseMSPXML(bytes) {
     result.calendars.push(cal);
   }
 
-  // Tasks
-  const taskEls = root.querySelectorAll('Tasks > Task');
-  for (let tei = 0; tei < taskEls.length; tei++) {
-    const te = taskEls[tei];
+  // ── Tasks ─────────────────────────────────────────────────────────────────
+  // getElementsByTagName then filter by direct Tasks parent — avoids namespace
+  // issues that querySelectorAll('Tasks > Task') has with the /2007 namespace.
+  const allTaskEls = root.getElementsByTagName('Task');
+  for (let tei = 0; tei < allTaskEls.length; tei++) {
+    const te = allTaskEls[tei];
+    if (!te.parentElement || te.parentElement.localName !== 'Tasks') continue;
+
     const extAttrs = {};
     const eaEls = te.getElementsByTagName('ExtendedAttribute');
     for (let eai = 0; eai < eaEls.length; eai++) {
@@ -320,6 +374,53 @@ export function parseMSPXML(bytes) {
       predecessors: preds,
     });
   }
+
+  // ── Resources ─────────────────────────────────────────────────────────────
+  // Parse the <Resources> block. Each <Resource> maps to an RSRC row in XER.
+  const rsrcContainer = root.getElementsByTagName('Resources')[0];
+  if (rsrcContainer) {
+    const rsrcEls = rsrcContainer.getElementsByTagName('Resource');
+    for (let ri = 0; ri < rsrcEls.length; ri++) {
+      const re   = rsrcEls[ri];
+      const ruid = parseInt(txt(re, 'UID'));
+      if (isNaN(ruid) || ruid < 0) continue;
+      result.resources.push({
+        uid:         ruid,
+        name:        txt(re, 'Name'),
+        initials:    txt(re, 'Initials'),
+        type:        parseInt(txt(re, 'Type')) || 1,   // 1=Work(Labor), 2=Material(NonLabor)
+        maxUnits:    parseFloat(txt(re, 'MaxUnits')) || 1.0,
+        calendarUID: parseInt(txt(re, 'CalendarUID')) || -1,
+        group:       txt(re, 'Group'),
+      });
+    }
+  }
+
+  // ── Assignments ───────────────────────────────────────────────────────────
+  // Parse the <Assignments> block. Maps to TASKRSRC rows in XER.
+  // Skip entries with no ResourceUID or negative ResourceUID (budget tasks).
+  const asgContainer = root.getElementsByTagName('Assignments')[0];
+  if (asgContainer) {
+    const asgEls = asgContainer.getElementsByTagName('Assignment');
+    for (let ai = 0; ai < asgEls.length; ai++) {
+      const ae   = asgEls[ai];
+      const tuid = parseInt(txt(ae, 'TaskUID'));
+      const ruid = parseInt(txt(ae, 'ResourceUID'));
+      if (isNaN(tuid) || isNaN(ruid) || ruid < 0) continue;
+      result.assignments.push({
+        uid:         parseInt(txt(ae, 'UID')) || ai,
+        taskUID:     tuid,
+        resourceUID: ruid,
+        units:       parseFloat(txt(ae, 'Units')) || 0,
+        work:        parseWorkHrs(txt(ae, 'Work')),
+        actualWork:  parseWorkHrs(txt(ae, 'ActualWork')),
+        remainWork:  parseWorkHrs(txt(ae, 'RemainingWork')),
+        start:       txt(ae, 'Start'),
+        finish:      txt(ae, 'Finish'),
+      });
+    }
+  }
+
   return result;
 }
 
@@ -361,6 +462,19 @@ export function validateXER(bytes) {
 
   if (ttWbs.length) results.push({ severity: 'info', label: 'TT_WBS', desc: `${ttWbs.length} WBS Summary activities will be excluded from output` });
 
+  // Resources and assignments — informational, not blocking
+  const rsrcRows    = d.tables.RSRC     ? d.tables.RSRC.rows     : [];
+  const taskRsrcRows= d.tables.TASKRSRC ? d.tables.TASKRSRC.rows : [];
+  const projId      = d.tables.PROJECT.rows[0].proj_id;
+  const usedRsrcIds = new Set(taskRsrcRows.filter(tr => tr.proj_id === projId).map(tr => tr.rsrc_id));
+  const rsrcCount   = rsrcRows.filter(r => usedRsrcIds.has(r.rsrc_id)).length;
+  const asgCount    = taskRsrcRows.filter(tr => tr.proj_id === projId).length;
+  if (rsrcCount > 0 || asgCount > 0) {
+    results.push({ severity: 'info', label: 'Resources', desc: `${rsrcCount} resource(s), ${asgCount} assignment(s) will be converted` });
+  } else {
+    results.push({ severity: 'info', label: 'Resources', desc: 'No resource assignments found — schedule-only conversion' });
+  }
+
   return { results, parsedData: d };
 }
 
@@ -390,6 +504,15 @@ export function validateMSPXML(bytes) {
 
   const withText30 = detail.filter(t => t.extendedAttributes['188744016']);
   if (withText30.length) results.push({ severity: 'info', label: 'Activity IDs', desc: `${withText30.length} tasks carry Text30 Activity IDs (P6 round-trip source)` });
+
+  // Resources and assignments
+  const rsrcs = (d.resources || []).filter(r => r.uid >= 0);
+  const asgns = (d.assignments || []);
+  if (rsrcs.length > 0 || asgns.length > 0) {
+    results.push({ severity: 'info', label: 'Resources', desc: `${rsrcs.length} resource(s), ${asgns.length} assignment(s) will be converted` });
+  } else {
+    results.push({ severity: 'info', label: 'Resources', desc: 'No resource assignments found — schedule-only conversion' });
+  }
 
   return { results, parsedData: d };
 }
@@ -866,11 +989,99 @@ export function convertXERtoMSP(parsedData, origFilename) {
   });
 
   xml.push('</Tasks>');
+
+  // ── Resources block ────────────────────────────────────────────────────────
+  // Only export resources that have at least one assignment in this project.
+  // The RSRC table is global (all enterprise resources) — filtering by proj_id
+  // via TASKRSRC prevents global resource spillover into the MSP file.
+  const rsrcRows     = (d.tables.RSRC     || { rows: [] }).rows;
+  const taskRsrcRows = (d.tables.TASKRSRC || { rows: [] }).rows;
+
+  // Build set of rsrc_ids actually used in this project
+  const usedRsrcIds = new Set(
+    taskRsrcRows
+      .filter(tr => tr.proj_id === projId)
+      .map(tr => tr.rsrc_id)
+  );
+
+  // UID counter continues from where task UIDs left off (uidCtr already advanced)
+  // uidCtr is still live from the task loop above — we continue it here.
+  const rsrcUidMap = {};
+  rsrcRows.forEach(r => {
+    if (!usedRsrcIds.has(r.rsrc_id)) return;
+    rsrcUidMap[r.rsrc_id] = uidCtr++;   // uidCtr shared with task pass
+  });
+
+  xml.push('<Resources>');
+  rsrcRows.forEach(r => {
+    if (!usedRsrcIds.has(r.rsrc_id)) return;
+    const ruid  = rsrcUidMap[r.rsrc_id];
+    const rtype = (r.rsrc_type === 'RT_Labor') ? 1 : 2;   // 1=Work, 2=Material
+    xml.push('<Resource>');
+    xml.push('<UID>' + ruid + '</UID>');
+    // NM_CDATA_O/C used here — resource <Name> has same HTML-parser risk as task <Name>
+    xml.push(NM_CDATA_O + sanitiseCDATA(r.rsrc_name || r.rsrc_short_name || '') + NM_CDATA_C);
+    xml.push('<Initials>' + sanitiseXMLValue((r.rsrc_short_name || '').substring(0, 20)) + '</Initials>');
+    xml.push('<Type>' + rtype + '</Type>');
+    xml.push('<MaxUnits>1</MaxUnits>');
+    // Only link CalendarUID if the resource's calendar was exported as a task calendar
+    if (r.clndr_id && calUidMap[r.clndr_id]) {
+      xml.push('<CalendarUID>' + calUidMap[r.clndr_id] + '</CalendarUID>');
+    }
+    xml.push('</Resource>');
+  });
+  xml.push('</Resources>');
+
+  // ── Assignments block ──────────────────────────────────────────────────────
+  // Maps TASKRSRC rows to MSP Assignment elements.
+  // Skip any row where task_id or rsrc_id can't be resolved — orphaned rows
+  // cause MSP import errors.
+  let asgUidCtr    = uidCtr;   // continues from resource UIDs
+  let asgConverted = 0;
+
+  xml.push('<Assignments>');
+  taskRsrcRows.forEach(tr => {
+    if (tr.proj_id !== projId) return;
+    const taskUid = taskUidMap[tr.task_id];
+    const rsrcUid = rsrcUidMap[tr.rsrc_id];
+    if (!taskUid || !rsrcUid) return;   // skip orphans — TT_WBS or unmapped resource
+
+    const targetQty = parseFloat(tr.target_qty)     || 0;
+    const remainQty = parseFloat(tr.remain_qty)      || 0;
+    const actQty    = parseFloat(tr.act_reg_qty)     || 0;
+    const qtyPerHr  = parseFloat(tr.target_qty_per_hr) || 1;
+
+    // Use actual dates if available, fall back to target dates
+    const asgStartDt  = parseP6Date(tr.act_start_date)    || parseP6Date(tr.target_start_date);
+    const asgFinishDt = parseP6Date(tr.act_end_date)       || parseP6Date(tr.target_end_date);
+    const asgStart    = asgStartDt  ? formatMSPDate(adjustStart(asgStartDt))   : '';
+    const asgFinish   = asgFinishDt ? formatMSPDate(adjustFinish(asgFinishDt)) : '';
+
+    xml.push('<Assignment>');
+    xml.push('<UID>'          + (asgUidCtr++)             + '</UID>');
+    xml.push('<TaskUID>'      + taskUid                   + '</TaskUID>');
+    xml.push('<ResourceUID>'  + rsrcUid                   + '</ResourceUID>');
+    xml.push('<Units>'        + qtyPerHr.toFixed(6)       + '</Units>');
+    xml.push('<Work>'         + toWork(targetQty)         + '</Work>');
+    xml.push('<ActualWork>'   + toWork(actQty)            + '</ActualWork>');
+    xml.push('<RemainingWork>'+ toWork(remainQty)         + '</RemainingWork>');
+    if (asgStart)  xml.push('<Start>'  + asgStart  + '</Start>');
+    if (asgFinish) xml.push('<Finish>' + asgFinish + '</Finish>');
+    xml.push('<ActualCost>0</ActualCost>');
+    xml.push('<OvertimeWork>PT0H0M0S</OvertimeWork>');
+    xml.push('<CostRateTable>0</CostRateTable>');
+    xml.push('<WorkContour>8</WorkContour>');
+    xml.push('</Assignment>');
+    asgConverted++;
+  });
+  xml.push('</Assignments>');
+
   xml.push('</Project>');
 
   const blob     = new Blob([xml.join('\n')], { type: 'application/xml' });
   const filename = origFilename.replace(/\.[^.]+$/, '') + '_converted.xml';
   const detailCt = orderedItems.filter(i => i.type === 'task').length;
+  const rsrcConverted = Object.keys(rsrcUidMap).length;
 
   return {
     blob, filename,
@@ -880,6 +1091,8 @@ export function convertXERtoMSP(parsedData, origFilename) {
       'TT_WBS skipped':             skipped.length,
       'Calendars':                  calIds.length,
       'Relationships':              predsConverted,
+      'Resources':                  rsrcConverted,
+      'Assignments':                asgConverted,
       'SNET anchors (FF/SF risk)':  snetCount,
     },
   };
@@ -1099,6 +1312,160 @@ export function convertMSPtoXER(parsedData, origFilename) {
   lines.push('%F\ttask_pred_id\ttask_id\tpred_task_id\tproj_id\tpred_proj_id\tpred_type\tlag_hr_cnt\tcomments\tfloat_path\taref\tarls');
   predRows.forEach(pr => lines.push('%R\t' + pr.join('\t')));
 
+  // ── RSRC table ─────────────────────────────────────────────────────────────
+  // One row per resource from the MSP <Resources> block.
+  // rsrc_id base: 8000 to avoid collisions with calendar/task/wbs ID ranges.
+  // Resource calendar mapping: MSP resource calendars (IsBaseCalendar=0) have a
+  // BaseCalendarUID pointing to a real base calendar. Map through that to get
+  // the XER clndr_id. If not found, fall back to defaultClndrId.
+  const mspResources = d.resources || [];
+  const mspAssignments = d.assignments || [];
+
+  // Build lookup: MSP calendar UID → XER clndr_id (for base calendars only)
+  // Also map resource calendars through their BaseCalendarUID to the base
+  const mspCalUidToXerClndrId = {};
+  baseCals.forEach(c => {
+    if (calIdMap[c.uid]) mspCalUidToXerClndrId[c.uid] = calIdMap[c.uid];
+  });
+  // Resource calendars: find their base and map through it
+  const rsrcCals = (d.calendars || []).filter(c => c._isResource);
+  rsrcCals.forEach(rc => {
+    const baseXerClndr = mspCalUidToXerClndrId[rc.baseCalendarUID];
+    if (baseXerClndr) mspCalUidToXerClndrId[rc.uid] = baseXerClndr;
+  });
+
+  let xerRsrcIdCtr = 8000;
+  const xerRsrcIdMap = {};   // MSP resource UID → XER rsrc_id
+  mspResources.forEach(r => { xerRsrcIdMap[r.uid] = xerRsrcIdCtr++; });
+
+  if (mspResources.length > 0) {
+    lines.push('%T\tRSRC');
+    lines.push('%F\trsrc_id\tparent_rsrc_id\tclndr_id\trole_id\t' +
+      'shift_id\tuser_id\tpobs_id\tguid\trsrc_seq_num\temail_addr\t' +
+      'employee_code\toffice_phone\tother_phone\trsrc_name\trsrc_short_name\t' +
+      'rsrc_title_name\tdef_qty_per_hr\tcost_qty_type\tot_factor\tactive_flag\t' +
+      'auto_compute_act_flag\tdef_cost_qty_link_flag\tot_flag\tcurr_id\tunit_id\t' +
+      'rsrc_type\tlocation_id\trsrc_notes\tload_tasks_flag\tlevel_flag\tlast_checksum');
+
+    mspResources.forEach(r => {
+      const xid    = xerRsrcIdMap[r.uid];
+      // Map resource calendar through base: resource → base UID → XER clndr_id
+      const xclndr = mspCalUidToXerClndrId[r.calendarUID] || defaultClndrId;
+      const rtype  = (r.type === 2) ? 'RT_NonLabor' : 'RT_Labor';
+      const short  = sanitiseBytesToAscii((r.initials || r.name || '').substring(0, 20));
+      const full   = sanitiseBytesToAscii(r.name || '');
+      const row = [
+        String(xid), '', String(xclndr), '', '', '', '',
+        generateGuidBase64(), String(r.uid),
+        '', '', '', '',            // email, employee_code, office_phone, other_phone
+        full, short, '',           // rsrc_name, rsrc_short_name, rsrc_title_name
+        '1', 'QT_Hour', '1', 'Y', // def_qty_per_hr, cost_qty_type, ot_factor, active_flag
+        'N', 'N', 'N', '1', '',   // auto_compute, def_cost_link, ot_flag, curr_id, unit_id
+        rtype, '', '',             // rsrc_type, location_id, rsrc_notes
+        'N', 'N', '',             // load_tasks_flag, level_flag, last_checksum
+      ];
+      lines.push('%R\t' + row.join('\t'));
+    });
+
+    // ── RSRCRATE table ───────────────────────────────────────────────────────
+    // One row per resource. All cost fields zero — cost conversion is out of scope.
+    let rsrcRateId = 9000;
+    lines.push('%T\tRSRCRATE');
+    lines.push('%F\trsrc_rate_id\trsrc_id\tmax_qty_per_hr\tcost_per_qty\t' +
+      'start_date\tshift_period_id\tcost_per_qty2\tcost_per_qty3\tcost_per_qty4\tcost_per_qty5');
+
+    mspResources.forEach(r => {
+      lines.push('%R\t' + [
+        String(rsrcRateId++), String(xerRsrcIdMap[r.uid]),
+        '1', '0.0000', '2000-01-01 00:00', '',
+        '0.0000', '0.0000', '0.0000', '0.0000',
+      ].join('\t'));
+    });
+  }
+
+  // ── TASKRSRC table ──────────────────────────────────────────────────────────
+  // Maps MSP assignments to P6 TASKRSRC rows. 47 fields required.
+  // CRITICAL: skip any assignment where taskIdByUid[taskUID] or
+  // xerRsrcIdMap[resourceUID] is undefined — orphaned rows cause P6 import failure.
+  // UID=0 (sentinel) and summary tasks are not in taskIdByUid, so they skip cleanly.
+  if (mspAssignments.length > 0) {
+    let taskRsrcIdBase = 50000;
+    lines.push('%T\tTASKRSRC');
+    lines.push('%F\ttaskrsrc_id\ttask_id\tproj_id\tcost_qty_link_flag\t' +
+      'role_id\tacct_id\trsrc_id\tpobs_id\tskill_level\tremain_qty\ttarget_qty\t' +
+      'remain_qty_per_hr\ttarget_lag_drtn_hr_cnt\ttarget_qty_per_hr\tact_ot_qty\t' +
+      'act_reg_qty\trelag_drtn_hr_cnt\tot_factor\tcost_per_qty\ttarget_cost\t' +
+      'act_reg_cost\tact_ot_cost\tremain_cost\tact_start_date\tact_end_date\t' +
+      'restart_date\treend_date\ttarget_start_date\ttarget_end_date\t' +
+      'rem_late_start_date\trem_late_end_date\trollup_dates_flag\ttarget_crv\t' +
+      'remain_crv\tactual_crv\tts_pend_act_end_flag\tguid\trate_type\t' +
+      'act_this_per_cost\tact_this_per_qty\tcurv_id\trsrc_type\t' +
+      'cost_per_qty_source_type\tcreate_user\tcreate_date\thas_rsrchours\ttaskrsrc_sum_id');
+
+    mspAssignments.forEach(a => {
+      const xerTaskId = taskIdByUid[a.taskUID];
+      const xerRsrcId = xerRsrcIdMap[a.resourceUID];
+      if (!xerTaskId || !xerRsrcId) return;   // orphan guard — skip silently
+
+      const tq   = a.work       || 0;
+      const rq   = a.remainWork || 0;
+      const aq   = a.actualWork || 0;
+      // Clamp units to 10 max (P6 limit) — Units=0 becomes 1 (unassigned default)
+      const qph  = (a.units > 0) ? Math.min(a.units, 10) : 1;
+
+      // Dates: use assignment start/finish directly (already MSP format strings)
+      const aS = a.start  ? formatP6Date(parseMSPDate(a.start))  : '';
+      const aF = a.finish ? formatP6Date(parseMSPDate(a.finish)) : '';
+
+      // rsrc_type — look up from the resource record
+      const rsrcObj = mspResources.find(r => r.uid === a.resourceUID);
+      const rtype   = (rsrcObj && rsrcObj.type === 2) ? 'RT_NonLabor' : 'RT_Labor';
+
+      const row = [
+        String(taskRsrcIdBase++),  // taskrsrc_id
+        String(xerTaskId),         // task_id
+        '1',                       // proj_id
+        'N',                       // cost_qty_link_flag
+        '', '',                    // role_id, acct_id
+        String(xerRsrcId),         // rsrc_id
+        '', '',                    // pobs_id, skill_level
+        rq.toFixed(4),             // remain_qty
+        tq.toFixed(4),             // target_qty
+        qph.toFixed(6),            // remain_qty_per_hr
+        '0',                       // target_lag_drtn_hr_cnt
+        qph.toFixed(6),            // target_qty_per_hr
+        '0',                       // act_ot_qty
+        aq.toFixed(4),             // act_reg_qty
+        '0',                       // relag_drtn_hr_cnt
+        '1',                       // ot_factor
+        '0.0000',                  // cost_per_qty
+        '0.0000',                  // target_cost
+        '0.0000',                  // act_reg_cost
+        '0.0000',                  // act_ot_cost
+        '0.0000',                  // remain_cost
+        aS, aF,                    // act_start_date, act_end_date
+        aS, aF,                    // restart_date, reend_date
+        aS, aF,                    // target_start_date, target_end_date
+        aS, aF,                    // rem_late_start_date, rem_late_end_date
+        'N',                       // rollup_dates_flag
+        '', '', '',                // target_crv, remain_crv, actual_crv
+        'N',                       // ts_pend_act_end_flag
+        generateGuidBase64(),      // guid
+        'RR_ON',                   // rate_type
+        '0.0000',                  // act_this_per_cost
+        '0',                       // act_this_per_qty
+        '',                        // curv_id
+        rtype,                     // rsrc_type
+        'CS_Rsrc',                 // cost_per_qty_source_type
+        'ADMIN',                   // create_user
+        now,                       // create_date
+        'N',                       // has_rsrchours
+        '',                        // taskrsrc_sum_id
+      ];
+      lines.push('%R\t' + row.join('\t'));
+    });
+  }
+
   lines.push('%T\tSCHEDOPTIONS');
   lines.push('%F\tschedoptions_id\tproj_id\tsched_outer_depend_type\tsched_open_critical_flag\tsched_lag_early_start_flag\tsched_retained_logic\tsched_setplantoforecast\tsched_float_type\tsched_calendar_on_relationship_lag\tsched_use_expect_end_flag\tsched_use_project_end_date_for_float\tsched_level_float_thrs_cnt\tsched_level_outer_assign_flag\tsched_level_outer_assign_priority\tsched_level_over_allocation_pct\tsched_level_within_float_flag\tsched_level_keep_sched_date_flag\tsched_level_all_rsrc_flag\tsched_use_pcnt_as_actl_flag\tsched_type\tsched_calendar_type\tsched_progressed_activities\tsched_default_data_date_shift_cnt\tsched_level_priority_list\tenable_multiple_longest_path_calc');
   lines.push('%R\t1\t1\tSD_None\tN\tY\tSD_Retained\tN\tFT_TotFloat\tSC_Predecessor\tN\tN\t0\tN\t0\t0\tN\tN\tN\tN\tST_Retained\tSC_Project\tSP_ActualDates\t0\t\tN');
@@ -1115,6 +1482,8 @@ export function convertMSPtoXER(parsedData, origFilename) {
   const blob     = new Blob([bytes], { type: 'application/octet-stream' });
   const filename = origFilename.replace(/\.[^.]+$/, '') + '_converted.xer';
 
+  const asgConverted = mspAssignments.filter(a => taskIdByUid[a.taskUID] && xerRsrcIdMap[a.resourceUID]).length;
+
   return {
     blob, filename,
     summary: {
@@ -1124,6 +1493,8 @@ export function convertMSPtoXER(parsedData, origFilename) {
       'Calendars exported':     baseCals.length,
       'Resource cals dropped':  rsrcDropped,
       'Relationships':          predsConverted,
+      'Resources':              mspResources.length,
+      'Assignments':            asgConverted,
       'Activity IDs':           hasText30 ? 'Restored from Text30' : 'Generated',
     },
   };
