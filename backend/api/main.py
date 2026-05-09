@@ -5,25 +5,20 @@ Upload a schedule file (XER or MPP), get a health report card.
 Product: SKOPIA Lens — "Schedule confidence, in seconds."
 
 v0.8: Added schedule_data block (activities, wbs_nodes, relationships, calendars).
-v0.9: Fixed wbs_nodes — if model.wbs_nodes is empty or names are missing,
-      reconstruct the WBS hierarchy from activity wbs_id/wbs_path data.
-      Also adds wbs_name (friendly display name) to each activity.
-v1.0: Added /api/mpp-to-xml endpoint. Accepts a binary .mpp file, converts it
-      to MSP XML via MPXJ MSPDIWriter, returns the XML bytes for download.
-      This enables the ConvertView mpp2xer direction: the frontend POSTs the
-      MPP, receives MSP XML, then runs the client-side xml2xer converter.
-v1.1: JVM pre-warm on startup. The JVM is now started during FastAPI's startup
-      event so it is ready before the first request arrives. Also added
-      /api/warmup endpoint for the frontend to poll on cold-start, and
-      /api/jvm-status for diagnostics.
+v0.9: Fixed wbs_nodes reconstruction from wbs_path breadcrumbs.
+v1.0: Added /api/mpp-to-xml (MPXJ MSPDIWriter approach — retired).
+v1.1: Replaced /api/mpp-to-xml with /api/mpp-to-xer. MPP files are now
+      converted entirely server-side: MPPParserAdapter → ScheduleModel →
+      Python XER writer → XER bytes returned directly.
+      No MSP XML intermediary, no ByteArrayOutputStream, no JVM warmup polling.
+      The existing /api/analyse MPP parser is reused — same code path, proven
+      to work on Render. The XER writer (_write_xer) is pure Python.
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
-import logging
-from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, date
 
@@ -38,40 +33,13 @@ from parsers.base import get_parser_for_file, ParseError
 from parsers.xer_adapter_mpxj import XERMPXJParserAdapter
 from parsers.mpp_adapter import MPPParserAdapter
 from checks.engine import run_health_check, HealthReport
+import logging
 from api.pdf_export import router as pdf_router
-
-logger = logging.getLogger(__name__)
-
-# ── JVM pre-warm on startup ───────────────────────────────────────────────────
-# On Render free tier the container spins down after inactivity. When it wakes,
-# the JVM must be started before any /api/mpp-to-xml request can succeed.
-# Starting it here (during FastAPI startup) means it is ready before the first
-# request arrives — even after a cold-start delay.
-# _jvm_ready is checked by /api/warmup so the frontend can poll and wait.
-_jvm_ready = False
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Pre-warm the JVM during application startup."""
-    global _jvm_ready
-    try:
-        logger.info("Starting JVM pre-warm...")
-        _ensure_jvm()
-        _jvm_ready = True
-        logger.info("JVM pre-warm complete — MPXJ ready.")
-    except Exception as e:
-        # Don't crash the app if JVM fails to start — /api/analyse (XER/MPP
-        # health check) still works. Log and continue.
-        logger.warning(f"JVM pre-warm failed (non-fatal): {e}")
-    yield
-    # Shutdown: nothing to clean up — JVM lifecycle is managed by JPype
-
 
 app = FastAPI(
     title="SKOPIA Lens API",
     description="Upload a P6 or MS Project schedule, get an instant health report card. SKOPIA Lens — schedule confidence, in seconds.",
-    version="1.1.0",
-    lifespan=lifespan,
+    version="1.0.0",
 )
 
 app.add_middleware(
@@ -98,47 +66,10 @@ app.include_router(pdf_router)
 async def root():
     return {
         "service": "SKOPIA Lens",
-        "version": "1.1.0",
+        "version": "1.0.0",
         "tagline": "Schedule confidence, in seconds.",
         "supported_formats": [p.format_name for p in PARSERS],
         "supported_extensions": [ext for p in PARSERS for ext in p.supported_extensions],
-    }
-
-
-@app.get("/api/warmup")
-async def warmup():
-    """
-    Lightweight JVM readiness probe for the frontend.
-
-    The frontend polls this before attempting /api/mpp-to-xml on the first
-    visit after a cold-start. Returns jvm_ready=true once the startup
-    lifespan handler has finished pre-warming the JVM.
-
-    If the lifespan pre-warm failed, this endpoint attempts _ensure_jvm()
-    directly as a fallback — then updates _jvm_ready for subsequent calls.
-    """
-    global _jvm_ready
-    if not _jvm_ready:
-        try:
-            _ensure_jvm()
-            _jvm_ready = True
-        except Exception as e:
-            return {"jvm_ready": False, "reason": str(e)}
-    return {"jvm_ready": True}
-
-
-@app.get("/api/jvm-status")
-async def jvm_status():
-    """Diagnostic: report JVM state without attempting to start it."""
-    try:
-        import jpype
-        started = jpype.isJVMStarted()
-    except ImportError:
-        started = False
-    return {
-        "jvm_ready_flag": _jvm_ready,
-        "jpype_jvm_started": started,
-        "version": "1.1.0",
     }
 
 
@@ -184,52 +115,52 @@ async def analyse_schedule(file: UploadFile = File(...)):
             pass
 
 
-@app.post("/api/mpp-to-xml")
-async def mpp_to_xml(file: UploadFile = File(...)):
+@app.post("/api/mpp-to-xer")
+async def mpp_to_xer(file: UploadFile = File(...)):
     """
-    Convert a binary MS Project .mpp file to MSP XML format.
+    Convert a binary MS Project .mpp file directly to Primavera P6 XER format.
 
-    Used by ConvertView's mpp2xer direction:
-      1. Frontend POSTs the .mpp file here.
-      2. This endpoint reads it via MPXJ UniversalProjectReader and writes
-         MSP XML via MSPDIWriter (writes to temp file, read back as bytes),
-      3. Returns the XML bytes as application/xml for direct download or
-         for the client-side xml2xer converter to consume as the next step.
+    Architecture (v1.1 — replaces the /api/mpp-to-xml approach):
+      1. Read the .mpp via MPPParserAdapter → ScheduleModel.
+         This is the same parser used by /api/analyse — proven to work on Render.
+      2. Serialise the ScheduleModel to XER format using _write_xer() — a pure
+         Python function, no JVM involvement, no byte conversion issues.
+      3. Return XER bytes directly as text/plain for download.
 
-    MPXJ/JVM is already running in-process (started by xer_adapter_mpxj or
-    mpp_adapter on the first /api/analyse call). The _ensure_jvm() helper
-    handles the startup-once pattern safely.
-
-    Accepts: .mpp only — .xml files should go straight to the client-side
-             convertor without touching the backend.
-    Returns: MSP XML bytes (application/xml)
-             Content-Disposition: attachment; filename=<original_name>.xml
+    Why this is better than the old MPP→XML→client approach:
+      - No MPXJ MSPDIWriter involved — eliminates the ByteArrayOutputStream/
+        JPype byte[] conversion bug that caused the 0-byte responses.
+      - No XML intermediary — the client never needs to parse and re-convert.
+      - No JVM warmup polling — MPPParserAdapter already handles JVM startup
+        correctly (same as /api/analyse).
+      - Round-trip fidelity matches the XER→MSP XML path since both go through
+        the same ScheduleModel normalisation layer.
     """
     filename = file.filename or "schedule.mpp"
 
-    # Reject anything that isn't an MPP file up-front
     if not filename.lower().endswith(".mpp"):
         raise HTTPException(status_code=400, detail={
             "error": "unsupported_format",
             "message": f"Expected a .mpp file, got: {filename}",
-            "details": "Only binary MS Project .mpp files should be sent to this endpoint. "
-                       "MSP XML files (.xml) are handled entirely client-side.",
         })
 
-    # Write upload to a temp file so MPXJ can read it by path
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mpp") as tmp:
+    suffix = Path(filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        xml_bytes = _convert_mpp_to_xml_bytes(tmp_path)
-    except HTTPException:
-        raise   # re-raise structured errors from the converter
+        # Reuse the existing MPP parser — same code path as /api/analyse
+        parser = MPPParserAdapter()
+        model  = parser.parse(tmp_path, filename=filename)
+    except ParseError as e:
+        raise HTTPException(status_code=422, detail={
+            "error": "parse_error", "message": str(e), "details": e.details,
+        })
     except Exception as e:
         raise HTTPException(status_code=500, detail={
-            "error": "conversion_error",
-            "message": f"MPP to XML conversion failed: {str(e)}",
+            "error": "parse_error", "message": f"Failed to read MPP: {e}",
         })
     finally:
         try:
@@ -237,119 +168,315 @@ async def mpp_to_xml(file: UploadFile = File(...)):
         except OSError:
             pass
 
-    # Build output filename: replace .mpp extension with .xml
-    stem = Path(filename).stem
-    out_filename = f"{stem}.xml"
+    # Serialise ScheduleModel → XER (pure Python, no JVM)
+    try:
+        xer_bytes = _write_xer(model, filename)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={
+            "error": "serialisation_error",
+            "message": f"XER serialisation failed: {e}",
+        })
+
+    stem        = Path(filename).stem
+    out_filename = f"{stem}_converted.xer"
 
     return Response(
-        content=xml_bytes,
-        media_type="application/xml",
+        content=xer_bytes,
+        media_type="text/plain; charset=windows-1252",
         headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
     )
 
 
-def _convert_mpp_to_xml_bytes(mpp_path: str) -> bytes:
+def _write_xer(model: ScheduleModel, source_filename: str = "schedule") -> bytes:
     """
-    Read an MPP file via MPXJ and serialise it to MSP XML bytes.
+    Serialise a ScheduleModel to Primavera P6 XER format (bytes, Windows-1252).
 
-    WHY TEMP FILE, NOT ByteArrayOutputStream:
-    The original implementation used ByteArrayOutputStream and converted the
-    returned Java byte[] to Python bytes via iteration:
-        bytes([int(b) & 0xFF for b in baos.toByteArray()])
-    This works in local testing but fails on some JVM/JPype/platform combinations
-    (confirmed on Render) — the iterator over a Java byte[] returns zero items
-    for large arrays, producing an empty bytes object and a silent 200 response.
+    XER is a tab-delimited text format. Each table starts with %T <TableName>,
+    followed by %F <field list>, then %R <row> for each record.
+    The file ends with %E.
 
-    The fix: write to a temp file using MSPDIWriter.write(ProjectFile, String),
-    then read the file back as Python bytes. No JPype type conversion needed —
-    Python's open() reads the file natively. The temp file is always deleted in
-    the finally block regardless of outcome.
+    This function mirrors the logic in convertor.js convertMSPtoXER() but runs
+    server-side in Python, operating on the ScheduleModel rather than parsed
+    MSP XML. Field counts and ordering match P6 import expectations.
+
+    Limitations (same as the client-side converter):
+      - Cost data not included (no RSRC cost rates)
+      - Baselines not included
+      - Activity codes not included
     """
-    _ensure_jvm()
+    from datetime import datetime, timezone
 
-    import jpype.imports
-    from org.mpxj.reader import UniversalProjectReader
-    from org.mpxj.mspdi  import MSPDIWriter
+    now_str  = datetime.now().strftime("%Y-%m-%d %H:%M")
+    proj_id  = "1"      # single-project XER always uses proj_id=1
+    guid     = _xer_guid()
 
-    # Read the MPP
-    try:
-        reader  = UniversalProjectReader()
-        project = reader.read(mpp_path)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail={
-            "error":   "parse_error",
-            "message": f"MPXJ could not read MPP file: {e}",
-            "details": "Ensure the file is a valid MS Project binary (.mpp) file. "
-                       "Password-protected files are not supported.",
-        })
+    # ── Date helpers ─────────────────────────────────────────────────────────
+    def p6dt(dt) -> str:
+        """Format a Python date/datetime as P6's 'YYYY-MM-DD HH:MM' string."""
+        if dt is None:
+            return ""
+        if hasattr(dt, "strftime"):
+            return dt.strftime("%Y-%m-%d %H:%M")
+        return str(dt)
 
-    # Write XML to a temp file — avoids JPype byte[] iteration entirely
-    xml_tmp = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as f:
-            xml_tmp = f.name
+    def hrs(h) -> str:
+        """Format hours as a string, defaulting to 0."""
+        if h is None:
+            return "0"
+        return f"{float(h):.4f}"
 
-        writer = MSPDIWriter()
-        writer.setMicrosoftProjectCompatibleOutput(True)
-        writer.write(project, xml_tmp)   # write(ProjectFile, String path)
+    # ── Constraint type mapping ───────────────────────────────────────────────
+    _CSTR_MAP = {
+        "ALAP":                  "CS_ALAP",
+        "FNLT":                  "CS_FNLT",
+        "FNET":                  "CS_FNET",
+        "SNLT":                  "CS_SNLT",
+        "SNET":                  "CS_SNET",
+        "MSO":                   "CS_MSO",
+        "MFO":                   "CS_MFO",
+        "NONE":                  "CS_ASAP",
+        "AS_SOON_AS_POSSIBLE":   "CS_ASAP",
+        "AS_LATE_AS_POSSIBLE":   "CS_ALAP",
+        "START_NO_EARLIER_THAN": "CS_SNET",
+        "START_NO_LATER_THAN":   "CS_SNLT",
+        "FINISH_NO_EARLIER_THAN":"CS_FNET",
+        "FINISH_NO_LATER_THAN":  "CS_FNLT",
+        "MUST_START_ON":         "CS_MSO",
+        "MUST_FINISH_ON":        "CS_MFO",
+    }
 
-        xml_bytes = Path(xml_tmp).read_bytes()
+    def cstr_type(ct) -> str:
+        if ct is None:
+            return "CS_ASAP"
+        key = ct.value if hasattr(ct, "value") else str(ct)
+        return _CSTR_MAP.get(key.upper(), "CS_ASAP")
 
-        if not xml_bytes:
-            raise HTTPException(status_code=500, detail={
-                "error":   "empty_output",
-                "message": "MSPDIWriter produced an empty XML file.",
-                "details": "The MPP file may be corrupt or contain no tasks.",
-            })
+    # ── Activity type mapping ─────────────────────────────────────────────────
+    _ATYPE_MAP = {
+        "TASK":             "TT_Task",
+        "MILESTONE":        "TT_Mile",
+        "START_MILESTONE":  "TT_Mile",
+        "FINISH_MILESTONE": "TT_FinMile",
+        "LOE":              "TT_LOE",
+        "SUMMARY":          "TT_WBS",
+        "WBS_SUMMARY":      "TT_WBS",
+        "HAMMOCK":          "TT_Task",
+    }
 
-        return xml_bytes
+    def act_type(at) -> str:
+        if at is None:
+            return "TT_Task"
+        key = at.value if hasattr(at, "value") else str(at)
+        return _ATYPE_MAP.get(key.upper(), "TT_Task")
 
-    finally:
-        if xml_tmp:
-            try:
-                os.unlink(xml_tmp)
-            except OSError:
-                pass
+    # ── Status mapping ────────────────────────────────────────────────────────
+    def task_status(act) -> str:
+        if act.actual_finish:
+            return "TK_Complete"
+        if act.actual_start:
+            return "TK_Active"
+        return "TK_NotStart"
+
+    # ── Relationship type mapping ─────────────────────────────────────────────
+    _REL_MAP = {
+        "FS": "PR_FS", "SS": "PR_SS", "FF": "PR_FF", "SF": "PR_SF",
+    }
+
+    def rel_type(rt) -> str:
+        key = rt.value if hasattr(rt, "value") else str(rt)
+        return _REL_MAP.get(key.upper(), "PR_FS")
+
+    # ── Assign integer IDs to WBS nodes and activities ───────────────────────
+    # XER requires integer PKs for relational joins.
+    wbs_nodes   = list(model.wbs_nodes) if model.wbs_nodes else []
+    activities  = [a for a in model.activities]
+    calendars   = list(model.calendars) if model.calendars else []
+    rels        = list(model.relationships) if model.relationships else []
+
+    wbs_id_map  = {str(w.id): (i + 100) for i, w in enumerate(wbs_nodes)}
+    act_id_map  = {str(a.id): (i + 1000) for i, a in enumerate(activities)}
+    cal_id_map  = {str(c.id): (i + 200) for i, c in enumerate(calendars)}
+
+    # Default calendar — first calendar, or a fallback ID
+    default_cal = cal_id_map[str(calendars[0].id)] if calendars else 200
+
+    # ── Project start/finish ──────────────────────────────────────────────────
+    proj_start  = model.planned_start  or (activities[0].planned_start  if activities else None)
+    proj_finish = model.planned_finish or (activities[-1].planned_finish if activities else None)
+
+    lines = []
+    lines.append("ERMHDR	19.12	2023-01-01	Project	admin	Admin				1	0.0	")
+
+    # ── PROJECT table ─────────────────────────────────────────────────────────
+    stem = Path(source_filename).stem[:40]
+    lines.append("%T	PROJECT")
+    lines.append("%F	proj_id	ext_proj_id	proj_short_name	clndr_id	"
+                 "last_recalc_date	plan_start_date	plan_end_date	"
+                 "scd_end_date	act_start_date	act_end_date	"
+                 "orig_proj_id	guid	create_date	create_user	"
+                 "proj_url	proj_desc")
+    lines.append("%R	" + "	".join([
+        proj_id, stem, stem, str(default_cal),
+        now_str, p6dt(proj_start), p6dt(proj_finish),
+        p6dt(proj_finish), "", "",
+        "", guid, now_str, "ADMIN", "", "",
+    ]))
+
+    # ── CALENDAR table ────────────────────────────────────────────────────────
+    lines.append("%T	CALENDAR")
+    lines.append("%F	clndr_id	default_flag	clndr_name	proj_id	"
+                 "base_clndr_id	last_chng_date	day_hr_cnt	wk_hr_cnt	"
+                 "month_hr_cnt	clndr_type	clndr_data")
+
+    # Day index: 0=Sun,1=Mon...6=Sat. ScheduleModel working_days uses 0=Mon...6=Sun.
+    # Mapping: model 0→P6 2, 1→3, 2→4, 3→5, 4→6, 5→7, 6→1
+    _DAY_REMAP = {0: 2, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7, 6: 1}
+
+    for cal in calendars:
+        cid   = cal_id_map[str(cal.id)]
+        is_df = "1" if cid == default_cal else "0"
+        hpd   = cal.hours_per_day if hasattr(cal, "hours_per_day") else 8.0
+        hpw   = hpd * len(cal.working_days) if cal.working_days else hpd * 5
+
+        # Build clndr_data — P6's compact calendar encoding
+        # Format: (d|WD|s|hh:mm|f|hh:mm)(d|WD|...) for each working day
+        # Exceptions omitted for simplicity (holiday support is future work)
+        working_p6 = sorted([_DAY_REMAP.get(d, d + 1) for d in (cal.working_days or [0,1,2,3,4])])
+        day_blocks = ""
+        for d in working_p6:
+            day_blocks += f"(d|{d})(s|08:00)(f|{int(hpd):02d}:{int((hpd%1)*60):02d})"
+        clndr_data = day_blocks if day_blocks else "(d|2)(s|08:00)(f|08:00)(d|3)(s|08:00)(f|08:00)(d|4)(s|08:00)(f|08:00)(d|5)(s|08:00)(f|08:00)(d|6)(s|08:00)(f|08:00)"
+
+        lines.append("%R	" + "	".join([
+            str(cid), is_df, cal.name or "Standard",
+            proj_id, "", now_str,
+            f"{hpd:.2f}", f"{hpw:.2f}", f"{hpd*20:.2f}",
+            "CA_Base", clndr_data,
+        ]))
+
+    # ── PROJWBS table ─────────────────────────────────────────────────────────
+    lines.append("%T	PROJWBS")
+    lines.append("%F	wbs_id	proj_id	obs_id	seq_num	status_code	"
+                 "wbs_short_name	wbs_name	phase_id	parent_wbs_id	"
+                 "ev_user_pct	ev_etc_user_value	original_cost	"
+                 "at_completion_cost	forecast_cost	indep_remain_total_cost	"
+                 "ann_dscnt_rate_pct	dscnt_period_type	indep_remain_work_qty	"
+                 "anticip_start_date	anticip_end_date	ev_compute_type	"
+                 "ev_etc_compute_type	guid	pv_qty_sum	ac_qty_sum	"
+                 "ev_qty_sum	summ_base_proj_id	path_flag	levl_code")
+
+    for w in wbs_nodes:
+        wid    = wbs_id_map[str(w.id)]
+        pid    = wbs_id_map.get(str(w.parent_id), "") if w.parent_id else ""
+        short  = _xer_safe((getattr(w, "short_name", None) or str(w.id))[:24])
+        name   = _xer_safe(w.name or str(w.id))
+        lines.append("%R	" + "	".join([
+            str(wid), proj_id, "", "", "WS_Open",
+            short, name, "", str(pid),
+            "", "", "0", "0", "0", "0",
+            "", "", "0", "", "", "EV_TL", "EV_TL",
+            _xer_guid(), "0", "0", "0", "", "N", "",
+        ]))
+
+    # ── TASK table ───────────────────────────────────────────────────────────
+    lines.append("%T	TASK")
+    lines.append("%F	task_id	proj_id	wbs_id	clndr_id	phys_complete_pct	"
+                 "rev_fdbk_flag	act_this_per_work_qty	act_ot_work_qty	"
+                 "target_start_date	target_end_date	act_start_date	"
+                 "act_end_date	target_dur_hr_cnt	rem_dur_hr_cnt	"
+                 "act_work_qty	remain_work_qty	target_work_qty	"
+                 "orig_task_id	at_compl_work_qty	name	task_type	"
+                 "duration_type	status_code	task_code	drive_type	"
+                 "status_reviewer	pct_complete_type	constraint_date	"
+                 "actual_drtn_hr_cnt	cstr_type	priority_num	suspend_date	"
+                 "resume_date	cstr_type2	cstr_date2	drtn_type	"
+                 "guid	template_guid	rsrc_id")
+
+    for act in activities:
+        tid      = act_id_map[str(act.id)]
+        wid      = wbs_id_map.get(str(act.wbs_id), "") if act.wbs_id else ""
+        cid      = cal_id_map.get(str(act.calendar_id), str(default_cal)) if act.calendar_id else str(default_cal)
+        pct      = str(int(act.percent_complete or 0))
+        tstart   = p6dt(act.planned_start or act.early_start)
+        tfinish  = p6dt(act.planned_finish or act.early_finish)
+        astart   = p6dt(act.actual_start)
+        afinish  = p6dt(act.actual_finish)
+        odur     = hrs(act.original_duration_hours  or 0)
+        rdur     = hrs(act.remaining_duration_hours or 0)
+        cdt      = p6dt(act.constraint_date)
+        atype    = act_type(act.activity_type)
+        status   = task_status(act)
+        ctype    = cstr_type(act.constraint_type)
+        code     = _xer_safe(act.id)[:40]
+        name     = _xer_safe(act.name or "")
+
+        lines.append("%R	" + "	".join([
+            str(tid), proj_id, str(wid), cid, pct,
+            "N", "0", "0",
+            tstart, tfinish, astart, afinish,
+            odur, rdur, "0", rdur, odur,
+            "", "0",
+            name, atype, "DT_FixedDrtn", status, code,
+            "DT_Cpm", "", "PC_TotalPct",
+            cdt, "0", ctype, "500", "", "",
+            "CS_ASAP", "", "DT_FixedDrtn",
+            _xer_guid(), "", "",
+        ]))
+
+    # ── TASKPRED table ────────────────────────────────────────────────────────
+    lines.append("%T	TASKPRED")
+    lines.append("%F	task_pred_id	task_id	pred_task_id	proj_id	"
+                 "pred_proj_id	pred_type	lag_hr_cnt	comments	"
+                 "float_path	aref	arls")
+
+    pred_id = 5000
+    for rel in rels:
+        succ_int = act_id_map.get(str(rel.successor_id))
+        pred_int = act_id_map.get(str(rel.predecessor_id))
+        if not succ_int or not pred_int:
+            continue   # skip orphaned relationships
+        lag = hrs(rel.lag_hours or 0)
+        lines.append("%R	" + "	".join([
+            str(pred_id), str(succ_int), str(pred_int),
+            proj_id, proj_id,
+            rel_type(rel.type), lag,
+            "", "", "", "",
+        ]))
+        pred_id += 1
+
+    # ── SCHEDOPTIONS table ───────────────────────────────────────────────────
+    lines.append("%T	SCHEDOPTIONS")
+    lines.append("%F	schedoptions_id	proj_id	sched_type	sched_calendar_on_relationship_lag	"
+                 "sched_open_critical_flag	use_total_float_multiple_longest_path	"
+                 "enable_multiple_longest_paths_generation	"
+                 "number_longest_paths	sched_use_expect_end_flag	"
+                 "sched_lag_early_start_flag	sched_retained_logic	"
+                 "sched_setplantoforecast	sched_float_type	sched_calendar_on_relationship_lag2	"
+                 "sched_progress_override")
+    lines.append("%R	" + "	".join([
+        "1", proj_id, "SE_SCHEDULE", "Y", "N", "N", "N",
+        "1", "N", "Y", "Y", "N", "total_float", "Y", "N",
+    ]))
+
+    lines.append("%E")
+
+    raw = "\n".join(lines) + "\n"
+    return raw.encode("windows-1252", errors="replace")
 
 
-def _ensure_jvm() -> None:
-    """
-    Start the JVM with MPXJ jars if it is not already running.
+def _xer_safe(s: str) -> str:
+    """Strip tab and newline characters — they would break XER field parsing."""
+    if not s:
+        return ""
+    return str(s).replace("\t", " ").replace("\n", " ").replace("\r", "")
 
-    Safe to call multiple times — checks jpype.isJVMStarted() first.
-    Mirrors the pattern in xer_adapter_mpxj._start_jvm() so both code
-    paths share the same JVM instance (JPype only supports one per process).
-    """
-    try:
-        import jpype
-        import mpxj
-    except ImportError:
-        raise HTTPException(status_code=503, detail={
-            "error":   "dependency_missing",
-            "message": "MPXJ/JPype libraries are not installed.",
-            "details": "Install with: pip install mpxj jpype1 (requires Java 11+ runtime).",
-        })
 
-    if jpype.isJVMStarted():
-        return
+def _xer_guid() -> str:
+    """Generate a random GUID string in P6 format (no braces, uppercase)."""
+    import uuid
+    return str(uuid.uuid4()).upper()
 
-    import os
-    mpxj_pkg = os.path.dirname(mpxj.__file__)
-    lib_dir  = os.path.join(mpxj_pkg, "lib")
 
-    try:
-        if os.path.isdir(lib_dir):
-            jars = [os.path.join(lib_dir, f)
-                    for f in os.listdir(lib_dir) if f.endswith(".jar")]
-            jpype.startJVM(classpath=jars)
-        else:
-            jpype.startJVM()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail={
-            "error":   "jvm_start_failed",
-            "message": f"Failed to start Java VM: {e}",
-            "details": "Ensure Java 11+ is installed and JAVA_HOME is set correctly.",
-        })
 
 
 # ──────────────────────────────────────────────────────────────────────────────
