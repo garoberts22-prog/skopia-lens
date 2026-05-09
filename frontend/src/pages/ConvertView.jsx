@@ -408,7 +408,7 @@ export default function ConvertView() {
         flex: 1,
         background: SK.bg,
         overflowY: 'auto',
-        fontFamily: 'var(--font-body, "Open Sans", Arial, sans-serif)',
+        fontFamily: `var(--font-body, "Open Sans", Arial, sans-serif)`,
       }}
     >
       {/* ── Inner content wrapper — max-width centred ── */}
@@ -417,7 +417,7 @@ export default function ConvertView() {
         {/* ── Page title ─────────────────────────────────────────────────── */}
         <div style={{ marginBottom: 24 }}>
           <h2 style={{
-            fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+            fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
             fontWeight: 700,
             fontSize: 20,
             color: SK.text,
@@ -485,7 +485,7 @@ export default function ConvertView() {
         padding: '10px 0 16px',
         fontSize: 11,
         color: SK.muted,
-        fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+        fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
         fontWeight: 700,
         letterSpacing: '0.06em',
         textTransform: 'uppercase',
@@ -528,7 +528,7 @@ function StepBar({ step }) {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+                fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
                 fontWeight: 700,
                 fontSize: 12,
                 // Done = green, Active = cyan, Pending = light grey
@@ -544,7 +544,7 @@ function StepBar({ step }) {
                 fontSize: 12,
                 fontWeight: isAct ? 700 : 400,
                 color: isAct ? SK.text : isDone ? SK.pass : SK.muted,
-                fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+                fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
               }}>
@@ -671,7 +671,7 @@ function StepImport({
             <rect x="0" y="4" width="20" height="10" rx="3" fill="#F59E0B" />
           </svg>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontWeight: 600, fontSize: 14, color: SK.text, fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)' }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: SK.text, fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)` }}>
               Drop your file here, or click to browse
             </div>
             <div style={{ fontSize: 12, color: SK.muted, marginTop: 4 }}>{cfg.dropHint}</div>
@@ -691,7 +691,7 @@ function StepImport({
               <rect x="14" y="6" width="6" height="18" rx="1" fill="#c8cde0" />
             </svg>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: SK.text, fontFamily: 'var(--font-mono, monospace)' }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: SK.text, fontFamily: `var(--font-mono, monospace)` }}>
                 {file.name}
               </div>
               <div style={{ fontSize: 11, color: SK.muted }}>{formatBytes(file.size)}</div>
@@ -759,7 +759,7 @@ function DirBtn({ selected, onClick, label, sub, badge }) {
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
           color: SK.peri,
-          fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+          fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
           background: 'rgba(74,111,232,0.1)',
           padding: '2px 5px',
           borderRadius: 4,
@@ -770,7 +770,7 @@ function DirBtn({ selected, onClick, label, sub, badge }) {
         ←  →
       </div>
       <div style={{
-        fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+        fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
         fontWeight: 700,
         fontSize: 13,
         color: selected ? SK.cyan : SK.text,
@@ -823,7 +823,7 @@ function StepValidate({ results, hasFail, onBack, onConvert }) {
                 fontSize: 12,
                 fontWeight: 700,
                 flexShrink: 0,
-                fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+                fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
               }}>
                 {sev.icon}
               </div>
@@ -882,7 +882,7 @@ function StepConvert({ progress, status, onBack }) {
         fontSize: 14,
         fontWeight: 600,
         color: SK.text,
-        fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+        fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
         marginBottom: 20,
         minHeight: 22,
       }}>
@@ -932,7 +932,7 @@ function StepDownload({ filename, summary, onDownload, onStartOver }) {
         margin: '-24px -24px 20px',
       }}>
         <h3 style={{
-          fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+          fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
           fontWeight: 700,
           fontSize: 18,
           color: '#fff',
@@ -962,10 +962,10 @@ function StepDownload({ filename, summary, onDownload, onStartOver }) {
               padding: '12px 14px',
             }}
           >
-            <div style={{ fontSize: 11, color: SK.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em', fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)', fontWeight: 700 }}>
+            <div style={{ fontSize: 11, color: SK.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.05em', fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`, fontWeight: 700 }}>
               {key}
             </div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: SK.text, fontFamily: 'var(--font-mono, monospace)' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: SK.text, fontFamily: `var(--font-mono, monospace)` }}>
               {String(val)}
             </div>
           </div>
@@ -1037,7 +1037,7 @@ function PrimaryBtn({ onClick, disabled, children }) {
         padding: '10px 24px',
         fontSize: 13,
         fontWeight: 700,
-        fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+        fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
         cursor: disabled ? 'not-allowed' : 'pointer',
         letterSpacing: '0.02em',
         opacity: disabled ? 0.7 : 1,
@@ -1063,7 +1063,7 @@ function DownloadBtn({ onClick, children }) {
         padding: '12px 28px',
         fontSize: 14,
         fontWeight: 700,
-        fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+        fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
         cursor: 'pointer',
         letterSpacing: '0.02em',
       }}
@@ -1087,4 +1087,29 @@ function GhostBtn({ onClick, children }) {
         padding: '10px 20px',
         fontSize: 13,
         fontWeight: 600,
-        fontFamily: 'var(--font-body, "Open Sans", Arial, sans-serif)',
+        fontFamily: `var(--font-body, "Open Sans", Arial, sans-serif)`,
+        cursor: 'pointer',
+        letterSpacing: '0.01em',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+// ── Shared style objects ──────────────────────────────────────────────────────
+// Defined once — used in multiple sub-components.
+const headingStyle = {
+  fontFamily: `var(--font-head, "Montserrat", Arial, sans-serif)`,
+  fontWeight: 700,
+  fontSize: 16,
+  color: '#1A1A2E',
+  margin: 0,
+}
+
+const subStyle = {
+  fontSize: 13,
+  color: '#6B7280',
+  margin: '4px 0 0',
+  lineHeight: 1.5,
+}
