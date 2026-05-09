@@ -260,7 +260,14 @@ export function parseXER(bytes) {
  * Returns: { project, calendars[], tasks[], resources[], assignments[] }
  */
 export function parseMSPXML(bytes) {
+  // Diagnostic: log byte count so we can confirm data arrived intact
+  console.log('[parseMSPXML] received bytes:', bytes?.byteLength ?? bytes?.length ?? 'null');
+  if (!bytes || bytes.length === 0) {
+    return { error: 'parseMSPXML received empty bytes — nothing to parse.' };
+  }
   const text = new TextDecoder('utf-8').decode(bytes);
+  // Log first 80 chars — distinguishes real XML from error HTML/JSON
+  console.log('[parseMSPXML] first 80 chars:', JSON.stringify(text.substring(0, 80)));
   const parser = new DOMParser();
   const doc = parser.parseFromString(text, 'application/xml');
   const err = doc.querySelector('parsererror');
