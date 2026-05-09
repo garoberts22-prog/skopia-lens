@@ -1,5 +1,5 @@
 """
-SKOPIA Lens — FastAPI Application (v0.9)
+SKOPIA Lens — FastAPI Application (v1.0)
 
 Upload a schedule file (XER or MPP), get a health report card.
 Product: SKOPIA Lens — "Schedule confidence, in seconds."
@@ -8,6 +8,11 @@ v0.8: Added schedule_data block (activities, wbs_nodes, relationships, calendars
 v0.9: Fixed wbs_nodes — if model.wbs_nodes is empty or names are missing,
       reconstruct the WBS hierarchy from activity wbs_id/wbs_path data.
       Also adds wbs_name (friendly display name) to each activity.
+v1.0: Added /api/mpp-to-xml endpoint. Accepts a binary .mpp file, converts it
+      to MSP XML via MPXJ MSPDIWriter, returns the XML bytes for download.
+      This enables the ConvertView mpp2xer direction: the frontend POSTs the
+      MPP, receives MSP XML, then runs the client-side xml2xer converter.
+      MPXJ/JVM is already running in-process — no new process or dependency.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import tempfile
 from pathlib import Path
 from datetime import datetime, date
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.models import (
@@ -34,7 +39,7 @@ from api.pdf_export import router as pdf_router
 app = FastAPI(
     title="SKOPIA Lens API",
     description="Upload a P6 or MS Project schedule, get an instant health report card. SKOPIA Lens — schedule confidence, in seconds.",
-    version="0.9.0",
+    version="1.0.0",
 )
 
 app.add_middleware(
@@ -61,7 +66,7 @@ app.include_router(pdf_router)
 async def root():
     return {
         "service": "SKOPIA Lens",
-        "version": "0.9.0",
+        "version": "1.0.0",
         "tagline": "Schedule confidence, in seconds.",
         "supported_formats": [p.format_name for p in PARSERS],
         "supported_extensions": [ext for p in PARSERS for ext in p.supported_extensions],
@@ -108,6 +113,155 @@ async def analyse_schedule(file: UploadFile = File(...)):
             os.unlink(tmp_path)
         except OSError:
             pass
+
+
+@app.post("/api/mpp-to-xml")
+async def mpp_to_xml(file: UploadFile = File(...)):
+    """
+    Convert a binary MS Project .mpp file to MSP XML format.
+
+    Used by ConvertView's mpp2xer direction:
+      1. Frontend POSTs the .mpp file here.
+      2. This endpoint reads it via MPXJ UniversalProjectReader and writes
+         MSP XML via MSPDIWriter into a ByteArrayOutputStream.
+      3. Returns the XML bytes as application/xml for direct download or
+         for the client-side xml2xer converter to consume as the next step.
+
+    MPXJ/JVM is already running in-process (started by xer_adapter_mpxj or
+    mpp_adapter on the first /api/analyse call). The _ensure_jvm() helper
+    handles the startup-once pattern safely.
+
+    Accepts: .mpp only — .xml files should go straight to the client-side
+             convertor without touching the backend.
+    Returns: MSP XML bytes (application/xml)
+             Content-Disposition: attachment; filename=<original_name>.xml
+    """
+    filename = file.filename or "schedule.mpp"
+
+    # Reject anything that isn't an MPP file up-front
+    if not filename.lower().endswith(".mpp"):
+        raise HTTPException(status_code=400, detail={
+            "error": "unsupported_format",
+            "message": f"Expected a .mpp file, got: {filename}",
+            "details": "Only binary MS Project .mpp files should be sent to this endpoint. "
+                       "MSP XML files (.xml) are handled entirely client-side.",
+        })
+
+    # Write upload to a temp file so MPXJ can read it by path
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mpp") as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        xml_bytes = _convert_mpp_to_xml_bytes(tmp_path)
+    except HTTPException:
+        raise   # re-raise structured errors from the converter
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={
+            "error": "conversion_error",
+            "message": f"MPP to XML conversion failed: {str(e)}",
+        })
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    # Build output filename: replace .mpp extension with .xml
+    stem = Path(filename).stem
+    out_filename = f"{stem}.xml"
+
+    return Response(
+        content=xml_bytes,
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{out_filename}"'},
+    )
+
+
+def _convert_mpp_to_xml_bytes(mpp_path: str) -> bytes:
+    """
+    Read an MPP file via MPXJ and serialise it to MSP XML bytes.
+
+    Uses MSPDIWriter.write(ProjectFile, OutputStream) — the in-memory stream
+    variant. No intermediate file is written; the XML is captured in a
+    Java ByteArrayOutputStream and returned as Python bytes.
+
+    JVM startup: delegates to _ensure_jvm(), which mirrors the pattern in
+    xer_adapter_mpxj._start_jvm() — checks isJVMStarted() before calling
+    startJVM() so repeated calls are safe.
+    """
+    _ensure_jvm()
+
+    # These imports are safe after _ensure_jvm() has run
+    import jpype.imports
+    from org.mpxj.reader import UniversalProjectReader
+    from org.mpxj.mspdi  import MSPDIWriter
+    from java.io          import ByteArrayOutputStream
+
+    # Read the MPP
+    try:
+        reader  = UniversalProjectReader()
+        project = reader.read(mpp_path)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail={
+            "error":   "parse_error",
+            "message": f"MPXJ could not read MPP file: {e}",
+            "details": "Ensure the file is a valid MS Project binary (.mpp) file. "
+                       "Password-protected files are not supported.",
+        })
+
+    # Write to an in-memory stream — no temp file needed
+    writer = MSPDIWriter()
+    writer.setMicrosoftProjectCompatibleOutput(True)   # MSP-compatible namespace + encoding
+
+    baos = ByteArrayOutputStream()
+    writer.write(project, baos)
+
+    # Convert Java byte[] to Python bytes.
+    # Java signed bytes: values -128..127. & 0xFF maps to 0..255.
+    java_bytes = baos.toByteArray()
+    return bytes([int(b) & 0xFF for b in java_bytes])
+
+
+def _ensure_jvm() -> None:
+    """
+    Start the JVM with MPXJ jars if it is not already running.
+
+    Safe to call multiple times — checks jpype.isJVMStarted() first.
+    Mirrors the pattern in xer_adapter_mpxj._start_jvm() so both code
+    paths share the same JVM instance (JPype only supports one per process).
+    """
+    try:
+        import jpype
+        import mpxj
+    except ImportError:
+        raise HTTPException(status_code=503, detail={
+            "error":   "dependency_missing",
+            "message": "MPXJ/JPype libraries are not installed.",
+            "details": "Install with: pip install mpxj jpype1 (requires Java 11+ runtime).",
+        })
+
+    if jpype.isJVMStarted():
+        return
+
+    import os
+    mpxj_pkg = os.path.dirname(mpxj.__file__)
+    lib_dir  = os.path.join(mpxj_pkg, "lib")
+
+    try:
+        if os.path.isdir(lib_dir):
+            jars = [os.path.join(lib_dir, f)
+                    for f in os.listdir(lib_dir) if f.endswith(".jar")]
+            jpype.startJVM(classpath=jars)
+        else:
+            jpype.startJVM()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={
+            "error":   "jvm_start_failed",
+            "message": f"Failed to start Java VM: {e}",
+            "details": "Ensure Java 11+ is installed and JAVA_HOME is set correctly.",
+        })
 
 
 # ──────────────────────────────────────────────────────────────────────────────
