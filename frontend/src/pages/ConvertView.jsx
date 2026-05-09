@@ -255,10 +255,15 @@ export default function ConvertView() {
         body:   formData,
       })
 
+      // Diagnostic: log response details to browser console
+      console.log('[mpp2xer] status:', resp.status, '| content-type:', resp.headers.get('content-type'))
+
       if (!resp.ok) {
         let msg = `Server error ${resp.status}`
         try {
-          const err = await resp.json()
+          const errText = await resp.text()
+          console.error('[mpp2xer] error body:', errText)
+          const err = JSON.parse(errText)
           msg = err.detail?.message || err.message || msg
         } catch (_) { /* keep default */ }
         throw new Error(msg)
@@ -268,13 +273,33 @@ export default function ConvertView() {
       setProgStatus('Received MSP XML — validating…')
 
       const arrayBuf = await resp.arrayBuffer()
+      console.log('[mpp2xer] received bytes:', arrayBuf.byteLength)
+
+      // Guard: 0 bytes = JVM cold-start not yet ready, or degenerate project
+      if (arrayBuf.byteLength === 0) {
+        throw new Error(
+          'Server returned 0 bytes. The Java runtime (MPXJ) may still be starting — ' +
+          'wait 10 seconds and try again.'
+        )
+      }
+
+      // Sniff first bytes — must be XML, not an HTML/JSON error page
+      const sniff = new TextDecoder('utf-8').decode(arrayBuf.slice(0, 100))
+      console.log('[mpp2xer] body start:', JSON.stringify(sniff.substring(0, 60)))
+      if (!sniff.includes('<?xml') && !sniff.includes('<Project')) {
+        throw new Error(
+          'Server returned unexpected content (not XML). ' +
+          'Preview: ' + sniff.substring(0, 80)
+        )
+      }
+
       xmlBytes = new Uint8Array(arrayBuf)
 
     } catch (err) {
       setProgStatus('Upload failed: ' + err.message)
       setProgress(0)
-      console.error('MPP upload error:', err)
-      return   // stay on step 3 — Back button (added to StepConvert) lets user retry
+      console.error('[mpp2xer] upload error:', err)
+      return
     }
 
     setMppXmlBytes(xmlBytes)
@@ -1063,28 +1088,3 @@ function GhostBtn({ onClick, children }) {
         fontSize: 13,
         fontWeight: 600,
         fontFamily: 'var(--font-body, "Open Sans", Arial, sans-serif)',
-        cursor: 'pointer',
-        letterSpacing: '0.01em',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-// ── Shared style objects ──────────────────────────────────────────────────────
-// Defined once — used in multiple sub-components.
-const headingStyle = {
-  fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
-  fontWeight: 700,
-  fontSize: 16,
-  color: '#1A1A2E',
-  margin: 0,
-}
-
-const subStyle = {
-  fontSize: 13,
-  color: '#6B7280',
-  margin: '4px 0 0',
-  lineHeight: 1.5,
-}
