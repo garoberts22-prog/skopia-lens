@@ -1,5 +1,5 @@
 """
-SKOPIA Lens — FastAPI Application (v1.0)
+SKOPIA Lens — FastAPI Application (v1.1)
 
 Upload a schedule file (XER or MPP), get a health report card.
 Product: SKOPIA Lens — "Schedule confidence, in seconds."
@@ -12,13 +12,18 @@ v1.0: Added /api/mpp-to-xml endpoint. Accepts a binary .mpp file, converts it
       to MSP XML via MPXJ MSPDIWriter, returns the XML bytes for download.
       This enables the ConvertView mpp2xer direction: the frontend POSTs the
       MPP, receives MSP XML, then runs the client-side xml2xer converter.
-      MPXJ/JVM is already running in-process — no new process or dependency.
+v1.1: JVM pre-warm on startup. The JVM is now started during FastAPI's startup
+      event so it is ready before the first request arrives. Also added
+      /api/warmup endpoint for the frontend to poll on cold-start, and
+      /api/jvm-status for diagnostics.
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, date
 
@@ -33,13 +38,40 @@ from parsers.base import get_parser_for_file, ParseError
 from parsers.xer_adapter_mpxj import XERMPXJParserAdapter
 from parsers.mpp_adapter import MPPParserAdapter
 from checks.engine import run_health_check, HealthReport
-import logging
 from api.pdf_export import router as pdf_router
+
+logger = logging.getLogger(__name__)
+
+# ── JVM pre-warm on startup ───────────────────────────────────────────────────
+# On Render free tier the container spins down after inactivity. When it wakes,
+# the JVM must be started before any /api/mpp-to-xml request can succeed.
+# Starting it here (during FastAPI startup) means it is ready before the first
+# request arrives — even after a cold-start delay.
+# _jvm_ready is checked by /api/warmup so the frontend can poll and wait.
+_jvm_ready = False
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Pre-warm the JVM during application startup."""
+    global _jvm_ready
+    try:
+        logger.info("Starting JVM pre-warm...")
+        _ensure_jvm()
+        _jvm_ready = True
+        logger.info("JVM pre-warm complete — MPXJ ready.")
+    except Exception as e:
+        # Don't crash the app if JVM fails to start — /api/analyse (XER/MPP
+        # health check) still works. Log and continue.
+        logger.warning(f"JVM pre-warm failed (non-fatal): {e}")
+    yield
+    # Shutdown: nothing to clean up — JVM lifecycle is managed by JPype
+
 
 app = FastAPI(
     title="SKOPIA Lens API",
     description="Upload a P6 or MS Project schedule, get an instant health report card. SKOPIA Lens — schedule confidence, in seconds.",
-    version="1.0.0",
+    version="1.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -66,10 +98,47 @@ app.include_router(pdf_router)
 async def root():
     return {
         "service": "SKOPIA Lens",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "tagline": "Schedule confidence, in seconds.",
         "supported_formats": [p.format_name for p in PARSERS],
         "supported_extensions": [ext for p in PARSERS for ext in p.supported_extensions],
+    }
+
+
+@app.get("/api/warmup")
+async def warmup():
+    """
+    Lightweight JVM readiness probe for the frontend.
+
+    The frontend polls this before attempting /api/mpp-to-xml on the first
+    visit after a cold-start. Returns jvm_ready=true once the startup
+    lifespan handler has finished pre-warming the JVM.
+
+    If the lifespan pre-warm failed, this endpoint attempts _ensure_jvm()
+    directly as a fallback — then updates _jvm_ready for subsequent calls.
+    """
+    global _jvm_ready
+    if not _jvm_ready:
+        try:
+            _ensure_jvm()
+            _jvm_ready = True
+        except Exception as e:
+            return {"jvm_ready": False, "reason": str(e)}
+    return {"jvm_ready": True}
+
+
+@app.get("/api/jvm-status")
+async def jvm_status():
+    """Diagnostic: report JVM state without attempting to start it."""
+    try:
+        import jpype
+        started = jpype.isJVMStarted()
+    except ImportError:
+        started = False
+    return {
+        "jvm_ready_flag": _jvm_ready,
+        "jpype_jvm_started": started,
+        "version": "1.1.0",
     }
 
 
