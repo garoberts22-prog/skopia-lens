@@ -94,6 +94,7 @@ const STAGES_MSP = [
 ]
 // MPP → XER stage labels (hybrid: server converts MPP→XML, then client runs xml2xer)
 const STAGES_MPP = [
+  'Waking server…',
   'Uploading MPP to server…',
   'Reading binary file (MPXJ)…',
   'Converting to MSP XML…',
@@ -237,9 +238,57 @@ export default function ConvertView() {
    * back to 2 (validation) once XML is received — transparent to the user.
    * On fetch failure stays on step 3 showing the error; Back button resets.
    */
+  /**
+   * checkServerReady — polls /api/warmup until the JVM is confirmed ready.
+   *
+   * Render free tier spins down after inactivity. On cold-start the container
+   * can take 50+ seconds to wake AND the JVM needs additional time to initialise
+   * on top of that. Polling here means the user sees a live countdown rather
+   * than a silent failure, and we don't hit /api/mpp-to-xml until the JVM
+   * is actually ready.
+   *
+   * Strategy: poll every 3 seconds for up to 90 seconds. Each failed attempt
+   * updates the progress label with elapsed time so the user knows it's working.
+   */
+  async function checkServerReady() {
+    const MAX_WAIT_MS  = 90_000   // 90 seconds max — free tier can be slow
+    const POLL_MS      = 3_000    // check every 3 seconds
+    const started      = Date.now()
+
+    while (Date.now() - started < MAX_WAIT_MS) {
+      try {
+        const r = await fetch(`${API_BASE}/api/warmup`, { method: 'GET' })
+        if (r.ok) {
+          const body = await r.json()
+          if (body.jvm_ready) return true   // JVM confirmed ready
+        }
+      } catch (_) {
+        // Network error — container still waking, keep polling
+      }
+      const elapsed = Math.round((Date.now() - started) / 1000)
+      setProgStatus(`Waking server… (${elapsed}s) — Java runtime starting`)
+      await new Promise(r => setTimeout(r, POLL_MS))
+    }
+    return false   // timed out
+  }
+
   async function handleMppUpload(f) {
     setStep(3)
-    setProgress(10)
+    setProgress(5)
+    setProgStatus('Waking server…')
+
+    // ── Step 1: Wait for JVM to be ready ─────────────────────────────────────
+    // This resolves the Render free-tier cold-start problem: the JVM needs time
+    // to initialise after the container wakes. We poll /api/warmup rather than
+    // hitting /api/mpp-to-xml immediately, which previously returned 0 bytes.
+    const ready = await checkServerReady()
+    if (!ready) {
+      setProgStatus('Server did not respond in time. Please try again.')
+      setProgress(0)
+      return
+    }
+
+    setProgress(15)
     setProgStatus('Uploading MPP to server…')
 
     const formData = new FormData()
@@ -255,7 +304,6 @@ export default function ConvertView() {
         body:   formData,
       })
 
-      // Diagnostic: log response details to browser console
       console.log('[mpp2xer] status:', resp.status, '| content-type:', resp.headers.get('content-type'))
 
       if (!resp.ok) {
@@ -275,22 +323,15 @@ export default function ConvertView() {
       const arrayBuf = await resp.arrayBuffer()
       console.log('[mpp2xer] received bytes:', arrayBuf.byteLength)
 
-      // Guard: 0 bytes = JVM cold-start not yet ready, or degenerate project
       if (arrayBuf.byteLength === 0) {
-        throw new Error(
-          'Server returned 0 bytes. The Java runtime (MPXJ) may still be starting — ' +
-          'wait 10 seconds and try again.'
-        )
+        throw new Error('Server returned 0 bytes after JVM was confirmed ready. Check Render backend logs.')
       }
 
-      // Sniff first bytes — must be XML, not an HTML/JSON error page
+      // Sniff first bytes — must be XML, not an error page
       const sniff = new TextDecoder('utf-8').decode(arrayBuf.slice(0, 100))
       console.log('[mpp2xer] body start:', JSON.stringify(sniff.substring(0, 60)))
       if (!sniff.includes('<?xml') && !sniff.includes('<Project')) {
-        throw new Error(
-          'Server returned unexpected content (not XML). ' +
-          'Preview: ' + sniff.substring(0, 80)
-        )
+        throw new Error('Server returned unexpected content (not XML). Preview: ' + sniff.substring(0, 80))
       }
 
       xmlBytes = new Uint8Array(arrayBuf)
