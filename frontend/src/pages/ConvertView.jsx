@@ -1,3 +1,7 @@
+// ╔══════════════════════════════════════════════════════╗
+// ║  ConvertView.jsx  v0.2  CLEAN BUILD                 ║
+// ║  Verify: grep for /api/mpp-to-xer and ERMHDR        ║
+// ╚══════════════════════════════════════════════════════╝
 // ── ConvertView.jsx ────────────────────────────────────────────────────────────
 //
 // SKOPIA Lens — Schedule Convertor view (v0.2)
@@ -14,9 +18,9 @@
 // Directions:
 //   'xer2xml'  — 100% client-side. XER → MSP XML via convertor.js.
 //   'xml2xer'  — 100% client-side. MSP XML → XER via convertor.js.
-//   'mpp2xer'  — Hybrid. POST .mpp to /api/mpp-to-xml (FastAPI/MPXJ),
-//                receive MSP XML bytes, then run client-side xml2xer.
-//                The backend call is transparent — the user sees one flow.
+//   'mpp2xer'  — Server-side. POST .mpp to /api/mpp-to-xer (FastAPI/MPXJ).
+//                Backend returns XER bytes directly — no XML intermediary,
+//                no client-side conversion step. Jumps to Download on success.
 //
 // API_BASE:
 //   Reads import.meta.env.VITE_API_BASE (set in .env / Render env vars).
@@ -117,7 +121,7 @@ export default function ConvertView() {
   const [file,       setFile]       = useState(null)   // File object
   const [fileBytes,  setFileBytes]  = useState(null)   // Uint8Array raw bytes
 
-  // For mpp2xer: MSP XML bytes returned from /api/mpp-to-xml, before client conversion
+  // mppXmlBytes retained for state consistency — unused in v1.1 (mpp2xer goes direct to XER)
   const [mppXmlBytes, setMppXmlBytes] = useState(null)
 
   // Validation results: [{ severity, label, desc }]
@@ -174,9 +178,9 @@ export default function ConvertView() {
    * Routes by direction:
    *   xer2xml  — expects .xer, reads to Uint8Array, validates client-side.
    *   xml2xer  — expects .xml, reads to Uint8Array, validates client-side.
-   *   mpp2xer  — expects .mpp, POSTs to /api/mpp-to-xml, receives MSP XML
-   *              bytes, then validates those bytes client-side as MSP XML.
-   *              Intermediate XML stored in mppXmlBytes — never shown to user.
+   *   mpp2xer  — expects .mpp, POSTs to /api/mpp-to-xer, receives XER bytes
+   *              directly. Skips validation step — jumps to Download.
+   *              No XML intermediary, no client-side conversion needed.
    *
    * Why Uint8Array for XER: Windows-1252 encoding + raw 0x7F bytes in
    * clndr_data. TextDecoder mangles both. Byte-by-byte is the only safe path.
@@ -699,7 +703,7 @@ function StepImport({
             borderRadius: 6, fontSize: 12, color: '#1E40AF', lineHeight: 1.5,
           }}>
             <strong>Server-assisted conversion:</strong> Your .mpp file is sent to the SKOPIA server,
-            converted to MSP XML via MPXJ, then the XER is generated in your browser.
+            converted directly to XER via MPXJ + Python. No XML intermediary.
             The file is not stored — it is discarded immediately after conversion.
           </div>
         ) : (

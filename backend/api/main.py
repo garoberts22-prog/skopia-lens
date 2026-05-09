@@ -1,4 +1,8 @@
 """
+# ╔══════════════════════════════════════════════════════╗
+# ║  SKOPIA Lens — main.py  v1.1  CLEAN BUILD           ║
+# ║  Verify: grep for /api/mpp-to-xer and _write_xer    ║
+# ╚══════════════════════════════════════════════════════╝
 SKOPIA Lens — FastAPI Application (v1.1)
 
 Upload a schedule file (XER or MPP), get a health report card.
