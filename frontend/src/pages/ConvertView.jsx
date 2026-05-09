@@ -1,9 +1,9 @@
 // ── ConvertView.jsx ────────────────────────────────────────────────────────────
 //
-// SKOPIA Lens — Schedule Convertor view (v0.1)
+// SKOPIA Lens — Schedule Convertor view (v0.2)
 //
-// A 4-step wizard ported from schedule-convertor.html into React.
-// ALL conversion logic lives in convertor.js — this file is UI only.
+// A 4-step wizard. ALL conversion logic lives in convertor.js — this file
+// is UI + orchestration only.
 //
 // Steps:
 //   1  Import   — direction selector + drag-drop file zone
@@ -11,11 +11,17 @@
 //   3  Convert  — progress bar with animated stages
 //   4  Download — summary grid + download button
 //
-// IMPORTANT: This tool is 100% client-side.
-//   - No calls to the FastAPI backend (/api/analyse).
-//   - Conversion runs entirely in the browser.
-//   - Compatible with mpp_adapter.py / xer_adapter_mpxj.py — they are
-//     completely separate code paths used only for the health check analysis.
+// Directions:
+//   'xer2xml'  — 100% client-side. XER → MSP XML via convertor.js.
+//   'xml2xer'  — 100% client-side. MSP XML → XER via convertor.js.
+//   'mpp2xer'  — Hybrid. POST .mpp to /api/mpp-to-xml (FastAPI/MPXJ),
+//                receive MSP XML bytes, then run client-side xml2xer.
+//                The backend call is transparent — the user sees one flow.
+//
+// API_BASE:
+//   Reads import.meta.env.VITE_API_BASE (set in .env / Render env vars).
+//   Falls back to '' so Vite's dev proxy (vite.config proxy: /api → :8000)
+//   works without any env file in local dev.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -31,6 +37,12 @@ import {
   convertMSPtoXER,
   downloadBlob,
 } from '../convertor'
+
+// ── API base URL ──────────────────────────────────────────────────────────────
+// VITE_API_BASE is set in .env.production / Render environment variables.
+// In local dev it's unset — falls back to '', and Vite's proxy config
+// forwards /api/* to the FastAPI backend at localhost:8000.
+const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 // ── Brand constants ───────────────────────────────────────────────────────────
 // Inline here so this component is self-contained and doesn't depend on Tailwind
@@ -80,6 +92,19 @@ const STAGES_MSP = [
   'Generating XER…',
   'Encoding output…',
 ]
+// MPP → XER stage labels (hybrid: server converts MPP→XML, then client runs xml2xer)
+const STAGES_MPP = [
+  'Uploading MPP to server…',
+  'Reading binary file (MPXJ)…',
+  'Converting to MSP XML…',
+  'Validating XML output…',
+  'Filtering calendars…',
+  'Reconstructing WBS…',
+  'Converting tasks…',
+  'Mapping relationships…',
+  'Generating XER…',
+  'Encoding output…',
+]
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function ConvertView() {
@@ -87,12 +112,18 @@ export default function ConvertView() {
   // step: 1=Import, 2=Validate, 3=Convert, 4=Download
   const [step,       setStep]       = useState(1)
 
-  // Conversion direction: 'xer2xml' (XER→MSP XML) or 'xml2xer' (MSP XML→XER)
+  // Conversion direction:
+  //   'xer2xml' — XER → MSP XML (client-side)
+  //   'xml2xer' — MSP XML → XER (client-side)
+  //   'mpp2xer' — MPP → XER (server converts MPP→XML, then client runs xml2xer)
   const [direction,  setDirection]  = useState('xer2xml')
 
   // Loaded file info
   const [file,       setFile]       = useState(null)   // File object
   const [fileBytes,  setFileBytes]  = useState(null)   // Uint8Array raw bytes
+
+  // For mpp2xer: MSP XML bytes returned from /api/mpp-to-xml, before client conversion
+  const [mppXmlBytes, setMppXmlBytes] = useState(null)
 
   // Validation results: [{ severity, label, desc }]
   const [valResults, setValResults] = useState([])
@@ -125,6 +156,7 @@ export default function ConvertView() {
   function clearFile() {
     setFile(null)
     setFileBytes(null)
+    setMppXmlBytes(null)
     setParsedData(null)
     setValResults([])
     setHasFail(false)
@@ -142,19 +174,41 @@ export default function ConvertView() {
   }
 
   /**
-   * handleFile — reads the file as ArrayBuffer, stores as Uint8Array,
-   * then runs validation and moves to step 2.
-   * Why Uint8Array: XER files are Windows-1252 and contain raw 0x7F bytes
-   * in clndr_data. TextDecoder mangles these. Byte-by-byte is the only
-   * safe way to read XER. MSP XML is then re-decoded in parseMSPXML().
+   * handleFile — entry point for all file drops/selections.
+   *
+   * Routes by direction:
+   *   xer2xml  — expects .xer, reads to Uint8Array, validates client-side.
+   *   xml2xer  — expects .xml, reads to Uint8Array, validates client-side.
+   *   mpp2xer  — expects .mpp, POSTs to /api/mpp-to-xml, receives MSP XML
+   *              bytes, then validates those bytes client-side as MSP XML.
+   *              Intermediate XML stored in mppXmlBytes — never shown to user.
+   *
+   * Why Uint8Array for XER: Windows-1252 encoding + raw 0x7F bytes in
+   * clndr_data. TextDecoder mangles both. Byte-by-byte is the only safe path.
    */
-  function handleFile(f) {
-    const ext      = f.name.split('.').pop().toLowerCase()
+  async function handleFile(f) {
+    const ext = f.name.split('.').pop().toLowerCase()
+
+    // ── mpp2xer: server-assisted path ────────────────────────────────────────
+    if (direction === 'mpp2xer') {
+      if (ext !== 'mpp') {
+        alert(`Expected a .mpp file for MPP → XER conversion. Got .${ext}.`)
+        return
+      }
+      setFile(f)
+      await handleMppUpload(f)
+      return
+    }
+
+    // ── xer2xml / xml2xer: fully client-side paths ───────────────────────────
     const expected = direction === 'xer2xml' ? 'xer' : 'xml'
 
-    // MPP binary files — give a specific message, not a generic error
+    // Friendly redirect if the user drops an MPP on a client-side direction
     if (ext === 'mpp') {
-      alert('MSP binary .mpp files are not supported.\nIn MS Project: File → Save As → XML Format (.xml), then upload the .xml file.')
+      alert(
+        'MPP binary files require the "MPP → XER" direction.\n' +
+        'Select that option, then drop your .mpp file.'
+      )
       return
     }
 
@@ -165,25 +219,88 @@ export default function ConvertView() {
 
     setFile(f)
 
-    // Read as ArrayBuffer → convert to Uint8Array
+    // Read as ArrayBuffer → Uint8Array (byte-accurate, preserves 0x7F)
     const reader = new FileReader()
     reader.onload = (e) => {
       const bytes = new Uint8Array(e.target.result)
       setFileBytes(bytes)
-      runValidation(bytes, f.name)
+      runValidationFromBytes(bytes, f.name)
     }
     reader.readAsArrayBuffer(f)
   }
 
+  /**
+   * handleMppUpload — POSTs the .mpp to /api/mpp-to-xml, stores the
+   * returned XML bytes, then validates them client-side as MSP XML.
+   *
+   * Uses step 3 (progress bar) while the server processes, then steps
+   * back to 2 (validation) once XML is received — transparent to the user.
+   * On fetch failure stays on step 3 showing the error; Back button resets.
+   */
+  async function handleMppUpload(f) {
+    setStep(3)
+    setProgress(10)
+    setProgStatus('Uploading MPP to server…')
+
+    const formData = new FormData()
+    formData.append('file', f)
+
+    let xmlBytes
+    try {
+      setProgress(30)
+      setProgStatus('Reading binary file (MPXJ)…')
+
+      const resp = await fetch(`${API_BASE}/api/mpp-to-xml`, {
+        method: 'POST',
+        body:   formData,
+      })
+
+      if (!resp.ok) {
+        let msg = `Server error ${resp.status}`
+        try {
+          const err = await resp.json()
+          msg = err.detail?.message || err.message || msg
+        } catch (_) { /* keep default */ }
+        throw new Error(msg)
+      }
+
+      setProgress(60)
+      setProgStatus('Received MSP XML — validating…')
+
+      const arrayBuf = await resp.arrayBuffer()
+      xmlBytes = new Uint8Array(arrayBuf)
+
+    } catch (err) {
+      setProgStatus('Upload failed: ' + err.message)
+      setProgress(0)
+      console.error('MPP upload error:', err)
+      return   // stay on step 3 — Back button (added to StepConvert) lets user retry
+    }
+
+    setMppXmlBytes(xmlBytes)
+    setFileBytes(xmlBytes)
+
+    await new Promise(r => setTimeout(r, 80))  // yield so progress bar updates
+
+    setStep(2)
+    runValidationFromBytes(xmlBytes, f.name.replace(/\.mpp$/i, '.xml'))
+  }
+
   // ── Validation ──────────────────────────────────────────────────────────────
-  function runValidation(bytes, filename) {
+  /**
+   * runValidationFromBytes — replaces the old runValidation.
+   * Renamed to make clear it operates on raw bytes, not a pre-selected direction.
+   * mpp2xer always runs validateMSPXML (the bytes it receives from the server
+   * ARE MSP XML — the server already converted from MPP).
+   */
+  function runValidationFromBytes(bytes, filename) {
     setStep(2)
 
-    // Call the appropriate validator from convertor.js
-    // Both return { results: [{severity, label, desc}], parsedData: obj|null }
-    const { results, parsedData: pd } = direction === 'xer2xml'
-      ? validateXER(bytes)
-      : validateMSPXML(bytes)
+    // mpp2xer validates the received XML as MSP XML; then converts via xml2xer path
+    const isXmlValidator = direction === 'xml2xer' || direction === 'mpp2xer'
+    const { results, parsedData: pd } = isXmlValidator
+      ? validateMSPXML(bytes)
+      : validateXER(bytes)
 
     setValResults(results)
     setParsedData(pd)
@@ -192,31 +309,40 @@ export default function ConvertView() {
 
   // ── Conversion ──────────────────────────────────────────────────────────────
   /**
-   * runConversion — async so we can yield between stages (setTimeout 0)
-   * to let React re-render the progress bar between each stage label update.
-   * The actual conversion is synchronous but wrapped in a promise chain
-   * so the progress bar animates step-by-step.
+   * runConversion — animates stage labels then calls the appropriate
+   * client-side converter from convertor.js.
+   *
+   * mpp2xer reuses convertMSPtoXER — by the time we reach this step the
+   * parsedData already contains validated MSP XML (from the server).
+   * The output filename is derived from the original .mpp name.
    */
   async function runConversion() {
     setStep(3)
     setProgress(0)
 
-    const stages = direction === 'xer2xml' ? STAGES_XER : STAGES_MSP
+    // mpp2xer uses its own longer stage list (includes the server steps already
+    // shown during upload, now showing the client-side xml2xer tail)
+    const stages = direction === 'xer2xml' ? STAGES_XER
+                 : direction === 'mpp2xer' ? STAGES_MPP
+                 : STAGES_MSP
 
     // Animate through stages with a short delay each
     for (let i = 0; i < stages.length; i++) {
       setProgStatus(stages[i])
       setProgress(Math.round(((i + 1) / stages.length) * 90))
-      // Small delay so React can re-render before next stage
       await new Promise(r => setTimeout(r, 120))
     }
 
     try {
-      // Run conversion — both functions are pure: they take parsed data and
-      // return { blob, filename, summary }
+      // mpp2xer: parsedData was populated from the server-returned XML, so
+      // convertMSPtoXER runs identically. Output filename uses the .mpp stem.
+      const outName = direction === 'mpp2xer'
+        ? file.name.replace(/\.mpp$/i, '_converted.xer')
+        : file.name
+
       const result = direction === 'xer2xml'
         ? convertXERtoMSP(parsedData, file.name)
-        : convertMSPtoXER(parsedData, file.name)
+        : convertMSPtoXER(parsedData, outName)
 
       setProgress(100)
       setProgStatus('Complete!')
@@ -224,7 +350,6 @@ export default function ConvertView() {
       setResultName(result.filename)
       setSummary(result.summary)
 
-      // Brief pause so user sees "Complete!" before moving to download
       await new Promise(r => setTimeout(r, 400))
       setStep(4)
 
@@ -312,7 +437,11 @@ export default function ConvertView() {
         )}
 
         {step === 3 && (
-          <StepConvert progress={progress} status={progStatus} />
+          <StepConvert
+            progress={progress}
+            status={progStatus}
+            onBack={progStatus.startsWith('Upload failed') ? startOver : null}
+          />
         )}
 
         {step === 4 && (
@@ -336,7 +465,7 @@ export default function ConvertView() {
         letterSpacing: '0.06em',
         textTransform: 'uppercase',
       }}>
-        SKOPIA Schedule Convertor · v0.1
+        SKOPIA Schedule Convertor · v0.2
       </div>
     </div>
   )
@@ -423,13 +552,27 @@ function StepImport({
   onDragOver, onDragLeave, onDrop,
   onFileChange, onClickZone, onClearFile,
 }) {
-  const isXer    = direction === 'xer2xml'
-  const accept   = isXer ? '.xer' : '.xml,.mpp'
-  const dropHint = isXer ? 'Accepts .xer files' : 'Accepts .xml files (MSP XML format)'
-  const title    = isXer ? 'Import XER File' : 'Import MSP XML File'
-  const sub      = isXer
-    ? 'Drag and drop your .xer file or click to browse.'
-    : 'Drag and drop your .xml file or click to browse. For .mpp files, export as XML from MS Project first.'
+  const zoneConfig = {
+    xer2xml: {
+      accept:   '.xer',
+      dropHint: 'Accepts .xer files',
+      title:    'Import XER File',
+      sub:      'Drag and drop your .xer file or click to browse.',
+    },
+    xml2xer: {
+      accept:   '.xml',
+      dropHint: 'Accepts .xml files (MSP XML format)',
+      title:    'Import MSP XML File',
+      sub:      'Drag and drop your .xml file or click to browse.',
+    },
+    mpp2xer: {
+      accept:   '.mpp',
+      dropHint: 'Accepts .mpp files (MS Project binary format)',
+      title:    'Import MPP File',
+      sub:      'Drag and drop your .mpp file or click to browse. The file is sent to the server — nothing is stored.',
+    },
+  }
+  const cfg = zoneConfig[direction] || zoneConfig.xer2xml
 
   return (
     <div>
@@ -438,40 +581,43 @@ function StepImport({
         <h3 style={headingStyle}>Select Conversion Direction</h3>
         <p style={subStyle}>Choose the format you are converting from and to.</p>
 
-        {/* Two direction buttons side by side */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
+        {/* Three direction buttons */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 16 }}>
           <DirBtn
             selected={direction === 'xer2xml'}
             onClick={() => onSelectDirection('xer2xml')}
             label="XER → MSP XML"
             sub="Primavera P6 to Microsoft Project"
-            arrows="— →"
           />
           <DirBtn
             selected={direction === 'xml2xer'}
             onClick={() => onSelectDirection('xml2xer')}
             label="MSP XML → XER"
             sub="Microsoft Project to Primavera P6"
-            arrows="— →"
+          />
+          <DirBtn
+            selected={direction === 'mpp2xer'}
+            onClick={() => onSelectDirection('mpp2xer')}
+            label="MPP → XER"
+            sub="MS Project binary to Primavera P6"
+            badge="Server"
           />
         </div>
       </Card>
 
       {/* ── File upload card ────────────────────────────────────────────── */}
       <Card>
-        <h3 style={headingStyle}>{title}</h3>
-        <p style={subStyle}>{sub}</p>
+        <h3 style={headingStyle}>{cfg.title}</h3>
+        <p style={subStyle}>{cfg.sub}</p>
 
-        {/* Hidden file input — triggered by clicking the drop zone */}
         <input
           ref={fileInputRef}
           type="file"
-          accept={accept}
+          accept={cfg.accept}
           style={{ display: 'none' }}
           onChange={onFileChange}
         />
 
-        {/* Drag-drop zone — gradient dashed border using background-clip trick */}
         <div
           onClick={onClickZone}
           onDragOver={onDragOver}
@@ -487,10 +633,6 @@ function StepImport({
             alignItems: 'center',
             justifyContent: 'center',
             gap: 10,
-            // Gradient dashed border: two background layers
-            // 1) solid white padding-box (inner fill)
-            // 2) gradient border-box (the dashed border colour)
-            // border itself is transparent so background shows through
             border: '2px dashed transparent',
             background: `
               linear-gradient(${isDragging ? 'rgba(30,200,212,0.08)' : '#fff'}, ${isDragging ? 'rgba(30,200,212,0.08)' : '#fff'}) padding-box,
@@ -499,33 +641,25 @@ function StepImport({
             transition: 'background 0.15s',
           }}
         >
-          {/* Folder icon */}
           <svg width="48" height="40" viewBox="0 0 48 40" fill="none">
             <rect x="0" y="8" width="48" height="32" rx="4" fill="#F59E0B" opacity="0.8" />
             <rect x="0" y="4" width="20" height="10" rx="3" fill="#F59E0B" />
           </svg>
-
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontWeight: 600, fontSize: 14, color: SK.text, fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)' }}>
               Drop your file here, or click to browse
             </div>
-            <div style={{ fontSize: 12, color: SK.muted, marginTop: 4 }}>{dropHint}</div>
+            <div style={{ fontSize: 12, color: SK.muted, marginTop: 4 }}>{cfg.dropHint}</div>
           </div>
         </div>
 
-        {/* File info row — shown once a file is selected */}
+        {/* File info row */}
         {file && (
           <div style={{
-            marginTop: 12,
-            padding: '10px 14px',
-            background: SK.bg,
-            borderRadius: 6,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            border: `1px solid ${SK.border}`,
+            marginTop: 12, padding: '10px 14px', background: SK.bg,
+            borderRadius: 6, display: 'flex', alignItems: 'center',
+            gap: 10, border: `1px solid ${SK.border}`,
           }}>
-            {/* File icon */}
             <svg width="20" height="24" viewBox="0 0 20 24" fill="none">
               <rect x="0" y="0" width="14" height="24" rx="2" fill="#E2E6F0" />
               <path d="M14 0 L20 6 L14 6 Z" fill="#c8cde0" />
@@ -537,54 +671,75 @@ function StepImport({
               </div>
               <div style={{ fontSize: 11, color: SK.muted }}>{formatBytes(file.size)}</div>
             </div>
-            {/* Remove file button */}
             <button
               onClick={e => { e.stopPropagation(); onClearFile() }}
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: SK.muted, fontSize: 18, lineHeight: 1, padding: 4 }}
               title="Remove file"
-            >
-              ×
-            </button>
+            >×</button>
           </div>
         )}
 
-        {/* MPP warning */}
-        <div style={{
-          marginTop: 14,
-          padding: '10px 14px',
-          background: '#FFFBEB',
-          border: '1px solid #FDE68A',
-          borderLeft: `4px solid ${SK.warn}`,
-          borderRadius: 6,
-          fontSize: 12,
-          color: '#92400E',
-          lineHeight: 1.5,
-        }}>
-          <strong>MPP files not supported:</strong> MS Project binary (.mpp) files cannot be read in the browser.
-          In MS Project: <strong>File → Save As → XML Format (.xml)</strong>, then upload the .xml file here.
-        </div>
+        {/* Direction-specific info card */}
+        {direction === 'mpp2xer' ? (
+          <div style={{
+            marginTop: 14, padding: '10px 14px', background: '#E6F1FB',
+            border: '1px solid #93C5FD', borderLeft: `4px solid ${SK.info}`,
+            borderRadius: 6, fontSize: 12, color: '#1E40AF', lineHeight: 1.5,
+          }}>
+            <strong>Server-assisted conversion:</strong> Your .mpp file is sent to the SKOPIA server,
+            converted to MSP XML via MPXJ, then the XER is generated in your browser.
+            The file is not stored — it is discarded immediately after conversion.
+          </div>
+        ) : (
+          <div style={{
+            marginTop: 14, padding: '10px 14px', background: '#F0FDF4',
+            border: '1px solid #BBF7D0', borderLeft: `4px solid ${SK.pass}`,
+            borderRadius: 6, fontSize: 12, color: '#166534', lineHeight: 1.5,
+          }}>
+            <strong>Runs entirely in your browser.</strong> No files are uploaded.
+            Have a binary .mpp file? Use the <strong>MPP → XER</strong> direction.
+          </div>
+        )}
       </Card>
     </div>
   )
 }
 
 // ── DirBtn ────────────────────────────────────────────────────────────────────
-// Direction selector card button
-function DirBtn({ selected, onClick, label, sub }) {
+// Direction selector card button. Optional badge (e.g. "Server") shown top-right.
+function DirBtn({ selected, onClick, label, sub, badge }) {
   return (
     <button
       onClick={onClick}
       style={{
         textAlign: 'center',
-        padding: '20px 16px',
+        padding: '16px 12px',
         border: selected ? `2px solid ${SK.cyan}` : `1px solid ${SK.border}`,
         borderRadius: 8,
         background: selected ? 'rgba(30,200,212,0.04)' : SK.card,
         cursor: 'pointer',
         transition: 'all 0.15s',
         outline: 'none',
+        position: 'relative',
       }}
     >
+      {/* Optional badge — e.g. "Server" for mpp2xer */}
+      {badge && (
+        <span style={{
+          position: 'absolute',
+          top: 6,
+          right: 8,
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: SK.peri,
+          fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
+          background: 'rgba(74,111,232,0.1)',
+          padding: '2px 5px',
+          borderRadius: 4,
+        }}>{badge}</span>
+      )}
       {/* Arrow icon */}
       <div style={{ color: SK.cyan, fontSize: 20, marginBottom: 8, letterSpacing: 4 }}>
         ←  →
@@ -592,13 +747,13 @@ function DirBtn({ selected, onClick, label, sub }) {
       <div style={{
         fontFamily: 'var(--font-head, "Montserrat", Arial, sans-serif)',
         fontWeight: 700,
-        fontSize: 14,
+        fontSize: 13,
         color: selected ? SK.cyan : SK.text,
         marginBottom: 4,
       }}>
         {label}
       </div>
-      <div style={{ fontSize: 12, color: SK.muted }}>{sub}</div>
+      <div style={{ fontSize: 11, color: SK.muted }}>{sub}</div>
     </button>
   )
 }
@@ -672,8 +827,10 @@ function StepValidate({ results, hasFail, onBack, onConvert }) {
 }
 
 // ── StepConvert ───────────────────────────────────────────────────────────────
-// Animated progress bar with stage status labels
-function StepConvert({ progress, status }) {
+// Animated progress bar with stage status labels.
+// onBack is non-null only when an MPP upload error occurred — gives the user
+// a way to reset and try again without refreshing the page.
+function StepConvert({ progress, status, onBack }) {
   return (
     <Card style={{ textAlign: 'center', padding: '40px 32px' }}>
       {/* Pulsing dots animation */}
@@ -726,6 +883,13 @@ function StepConvert({ progress, status }) {
       </div>
 
       <div style={{ fontSize: 12, color: SK.muted, marginTop: 8 }}>{progress}%</div>
+
+      {/* Back button — only shown when an upload error has occurred */}
+      {onBack && (
+        <div style={{ marginTop: 24 }}>
+          <GhostBtn onClick={onBack}>← Start Over</GhostBtn>
+        </div>
+      )}
     </Card>
   )
 }
@@ -795,7 +959,8 @@ function StepDownload({ filename, summary, onDownload, onStartOver }) {
         lineHeight: 1.6,
         marginBottom: 24,
       }}>
-        <strong>v0.1 limitations:</strong> Resources, baselines, activity codes, and UDFs are not converted.
+        <strong>v0.2 notes:</strong> Resources and assignment hours are converted.
+        Baselines, activity codes, UDFs, and cost data are not converted.
         Dates may shift ±1 day on round-trips due to constraint type mapping (ASAP → SNET is expected and correct).
       </div>
 
