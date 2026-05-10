@@ -1718,6 +1718,7 @@ export default function ScheduleView({ onNavigate }) {
     durUnit,      setDurUnit,
     dateFmt,      setDateFmt,
     tweaks:       sceneTweaks, setTweaks: setSceneTweaks, setTweak: setSceneTweak,
+    resetToDefault,                       // ← pulled up from below the early returns
   } = useScene()
 
   // Local UI state — NOT part of a Scene (transient / session-only)
@@ -2015,7 +2016,7 @@ export default function ScheduleView({ onNavigate }) {
   // ── Reset to Default Scene on new schedule upload ─────────────────────────
   // Fires only when source_filename changes — i.e. a new file was uploaded.
   // Does NOT fire on nav away/back (filename doesn't change in that case).
-  const { resetToDefault } = useScene()
+  // resetToDefault is destructured above with the other useScene values
   const lastFilenameRef = useRef(null)
   useEffect(() => {
     const newFile = analysis?.source_filename
