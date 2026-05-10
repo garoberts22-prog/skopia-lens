@@ -1718,7 +1718,6 @@ export default function ScheduleView({ onNavigate }) {
     durUnit,      setDurUnit,
     dateFmt,      setDateFmt,
     tweaks:       sceneTweaks, setTweaks: setSceneTweaks, setTweak: setSceneTweak,
-    resetToDefault,                       // ← pulled up from below the early returns
   } = useScene()
 
   // Local UI state — NOT part of a Scene (transient / session-only)
@@ -1911,65 +1910,8 @@ export default function ScheduleView({ onNavigate }) {
     ganttScrollL0.current   = ganttScrollRef.current?.scrollLeft ?? 0
     document.body.style.cursor = 'grabbing'
   }
-  // ── Loading / error states for lazy schedule_data fetch ─────────────────
-  // These render before the main Gantt body so all hooks above always run
-  // (hooks must not be called conditionally). The early returns are safe here
-  // because they come AFTER all hooks have been declared.
-
-  if (scheduleDataLoading) {
-    return (
-      <div style={{ flex:1, background:SK.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16 }}>
-        <div style={{
-          width: 36, height: 36,
-          border: `3px solid ${SK.border}`,
-          borderTopColor: SK.cyan,
-          borderRadius: '50%',
-          animation: 'svSpin 0.75s linear infinite',
-        }} />
-        <div style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:14, color:SK.muted }}>
-          Loading schedule…
-        </div>
-        <style>{`@keyframes svSpin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-    )
-  }
-
-  if (scheduleDataError) {
-    const isExpired = scheduleDataError?.code === 'SESSION_EXPIRED'
-    return (
-      <div style={{ flex:1, background:SK.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16 }}>
-        <div style={{ fontSize:40, opacity:0.3 }}>⚠</div>
-        <div style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:15, color:SK.fail }}>
-          {isExpired ? 'Session expired' : 'Could not load schedule'}
-        </div>
-        <div style={{ fontFamily:'var(--font-body)', fontSize:13, color:SK.muted, maxWidth:360, textAlign:'center', lineHeight:1.6 }}>
-          {isExpired
-            ? 'Your session expired after 10 minutes. Re-upload your schedule to view the Gantt.'
-            : (scheduleDataError?.message || 'An unexpected error occurred.')}
-        </div>
-        <button
-          onClick={() => onNavigate('upload')}
-          style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:12, background:SK.grad, color:'#fff', border:'none', borderRadius:6, padding:'8px 20px', cursor:'pointer' }}
-        >
-          Re-upload Schedule
-        </button>
-      </div>
-    )
-  }
-
-  if (!scheduleData) {
-    return (
-      <div style={{ flex:1, background:SK.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16 }}>
-        <div style={{ fontSize:48, opacity:0.12 }}>▦</div>
-        <div style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:16, color:SK.muted }}>No schedule loaded</div>
-        <button onClick={() => onNavigate('upload')} style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:12, background:SK.grad, color:'#fff', border:'none', borderRadius:6, padding:'8px 20px', cursor:'pointer' }}>Upload Schedule</button>
-      </div>
-    )
-  }
-
-  // baseline is already destructured above alongside analysis + scheduleData
-
-  const { activities: rawActivities, wbs_nodes:rawWbs, relationships, calendars: rawCalendars } = scheduleData
+  // rawActivities etc — scheduleData is guaranteed non-null by early returns below
+  const { activities: rawActivities, wbs_nodes:rawWbs, relationships, calendars: rawCalendars } = scheduleData || {}
 
   // ── Baseline merge (Option A — client-side) ──────────────────────────────
   // When a baseline file is uploaded via UploadView, its activities are matched
@@ -2016,7 +1958,7 @@ export default function ScheduleView({ onNavigate }) {
   // ── Reset to Default Scene on new schedule upload ─────────────────────────
   // Fires only when source_filename changes — i.e. a new file was uploaded.
   // Does NOT fire on nav away/back (filename doesn't change in that case).
-  // resetToDefault is destructured above with the other useScene values
+  const { resetToDefault } = useScene()
   const lastFilenameRef = useRef(null)
   useEffect(() => {
     const newFile = analysis?.source_filename
@@ -2891,6 +2833,61 @@ export default function ScheduleView({ onNavigate }) {
     setCpmAsOf('')
     setShowCpmPanel(false)
   }, [])
+
+  // ── Loading / error states — AFTER all hooks (React rules of hooks) ────────
+  // All useState/useRef/useEffect/useMemo/useCallback calls are above.
+  // These early returns are safe here because no hooks follow them.
+
+  if (scheduleDataLoading) {
+    return (
+      <div style={{ flex:1, background:SK.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16 }}>
+        <div style={{
+          width: 36, height: 36,
+          border: `3px solid ${SK.border}`,
+          borderTopColor: SK.cyan,
+          borderRadius: '50%',
+          animation: 'svSpin 0.75s linear infinite',
+        }} />
+        <div style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:14, color:SK.muted }}>
+          Loading schedule…
+        </div>
+        <style>{`@keyframes svSpin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    )
+  }
+
+  if (scheduleDataError) {
+    const isExpired = scheduleDataError?.code === 'SESSION_EXPIRED'
+    return (
+      <div style={{ flex:1, background:SK.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16 }}>
+        <div style={{ fontSize:40, opacity:0.3 }}>⚠</div>
+        <div style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:15, color:SK.fail }}>
+          {isExpired ? 'Session expired' : 'Could not load schedule'}
+        </div>
+        <div style={{ fontFamily:'var(--font-body)', fontSize:13, color:SK.muted, maxWidth:360, textAlign:'center', lineHeight:1.6 }}>
+          {isExpired
+            ? 'Your session expired after 10 minutes. Re-upload your schedule to view the Gantt.'
+            : (scheduleDataError?.message || 'An unexpected error occurred.')}
+        </div>
+        <button
+          onClick={() => onNavigate('upload')}
+          style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:12, background:SK.grad, color:'#fff', border:'none', borderRadius:6, padding:'8px 20px', cursor:'pointer' }}
+        >
+          Re-upload Schedule
+        </button>
+      </div>
+    )
+  }
+
+  if (!scheduleData) {
+    return (
+      <div style={{ flex:1, background:SK.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:16 }}>
+        <div style={{ fontSize:48, opacity:0.12 }}>▦</div>
+        <div style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:16, color:SK.muted }}>No schedule loaded</div>
+        <button onClick={() => onNavigate('upload')} style={{ fontFamily:'var(--font-head)', fontWeight:700, fontSize:12, background:SK.grad, color:'#fff', border:'none', borderRadius:6, padding:'8px 20px', cursor:'pointer' }}>Upload Schedule</button>
+      </div>
+    )
+  }
 
   return (
     <div style={{height:'100vh',display:'flex',flexDirection:'column',overflow:'hidden',background:SK.bg}}>
