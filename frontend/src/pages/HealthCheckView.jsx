@@ -365,7 +365,7 @@ export default function HealthCheckView({ onNavigate }) {
           {/* Stat tiles — 3×2 grid */}
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gridTemplateRows: 'repeat(2,1fr)', gap: 8 }}>
             {[
-              { l: 'Total Activities', v: s.total_activities },
+              { l: 'Total Activities', v: s.detail_tasks },
               { l: 'Incomplete',       v: s.incomplete_tasks },
               { l: 'Complete',         v: s.completed_tasks },
               { l: 'In Progress',      v: s.in_progress_tasks },
