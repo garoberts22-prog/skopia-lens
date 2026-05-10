@@ -34,7 +34,8 @@ export async function uploadSchedule(file, onProgress) {
 
   let response
   try {
-    response = await fetch('/api/analyse', {
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  response = await fetch(`${API_BASE}/api/analyse`, {
       method: 'POST',
       body: formData,
       // Do NOT set Content-Type manually with FormData — browser sets the boundary.
@@ -77,7 +78,8 @@ export async function uploadSchedule(file, onProgress) {
 export async function fetchScheduleData(sessionId) {
   let response
   try {
-    response = await fetch(`/api/schedule-data/${sessionId}`)
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  response = await fetch(`${API_BASE}/api/schedule-data/${sessionId}`)
   } catch (networkErr) {
     throw new Error(
       'Could not reach the SKOPIA Lens backend. ' +
@@ -118,7 +120,8 @@ export async function fetchScheduleData(sessionId) {
 export async function exportPdf(analysis, projectName = 'Schedule') {
   let response
   try {
-    response = await fetch('/api/export/pdf', {
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    response = await fetch(`${API_BASE}/api/export/pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(analysis),
