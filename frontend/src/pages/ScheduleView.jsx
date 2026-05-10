@@ -1,21 +1,27 @@
-// ── ScheduleView.jsx (v0.9.1) ────────────────────────────────────────────────
+// ── ScheduleView.jsx (v0.9.2) ────────────────────────────────────────────────
 //
 // Fixes applied vs v0.9:
 //  1. Vertical divider no longer stretches table columns — uses flex layout
 //     with fixed left panel width in px, not %. Table has its own scroll.
 //  2. Grouping panel has "Hide empty WBS bands" toggle
-//  3. Critical-only mode skips WBS bands, shows a flat waterfall of activities
+//  3. Critical-only mode preserves WBS bands — toggled via Grouping panel
 //  4. Column header click sorts asc/desc (↑/↓) — schedule table + rel panel
 //  5. Table and relationship panel headers use SK.bg (#F7F8FC) with
 //     2px bottom border — matching prototype exactly
 //  6. Relationship panel Columns button: hover-to-open, hover-away-to-close,
 //     portal opens UPWARD pinned to bottom-right of the button
+//  7. Scenes — saved view layout snapshots. SceneContext lifts scene state so
+//     it survives navigation. SceneManager panel added between As-of chip and
+//     the Customise cog. Default applied only on new schedule upload or explicit
+//     selection. User scenes persist in localStorage across sessions.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import ReactDOM from 'react-dom'
 import { useAnalysis } from '../context/AnalysisContext'
+import { useScene }    from '../context/SceneContext'
+import SceneManager    from '../components/SceneManager'
 
 // ── Brand colours ─────────────────────────────────────────────────────────────
 const SK = {
@@ -881,11 +887,15 @@ function ColMgrPanel({ cols, setCols }) {
   )
 }
 
-function DurUnitPanel({ unit, setUnit }) {
+// ── FormatsPanel — consolidated Duration Units + Date Format ──────────────────
+// Replaces the two separate DurUnitPanel and DateFmtPanel toolbar buttons.
+function FormatsPanel({ unit, setUnit, fmt, setFmt }) {
   return (
-    <div style={dropStyle(220)}>
-      <div style={{padding:'10px 14px'}}>
-        <div style={{fontFamily:'var(--font-head)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'0.07em',color:SK.muted,marginBottom:10}}>Duration Units</div>
+    <div style={dropStyle(240)}>
+      <div style={{padding:'12px 14px'}}>
+
+        {/* Duration Units section */}
+        <div style={{fontFamily:'var(--font-head)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'0.07em',color:SK.muted,marginBottom:8}}>Duration Units</div>
         {['Days','Weeks','Months'].map(u=>(
           <label key={u} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',cursor:'pointer'}}>
             <input type="radio" checked={unit===u} onChange={()=>setUnit(u)} style={{accentColor:SK.peri}}/>
@@ -893,16 +903,12 @@ function DurUnitPanel({ unit, setUnit }) {
             <span style={{fontFamily:'var(--font-mono)',fontSize:10,color:SK.muted}}>{u==='Days'?'5d':u==='Weeks'?'1.0w':'0.5m'}</span>
           </label>
         ))}
-      </div>
-    </div>
-  )
-}
 
-function DateFmtPanel({ fmt, setFmt }) {
-  return (
-    <div style={dropStyle(200)}>
-      <div style={{padding:'10px 14px'}}>
-        <div style={{fontFamily:'var(--font-head)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'0.07em',color:SK.muted,marginBottom:10}}>Date Format</div>
+        {/* Divider */}
+        <div style={{height:1,background:SK.border,margin:'10px 0'}}/>
+
+        {/* Date Format section */}
+        <div style={{fontFamily:'var(--font-head)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'0.07em',color:SK.muted,marginBottom:8}}>Date Format</div>
         {['DD/MM/YYYY','DD/MM/YY','DD-Mon-YY'].map(o=>(
           <label key={o} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',cursor:'pointer'}}>
             <input type="radio" checked={fmt===o} onChange={()=>setFmt(o)} style={{accentColor:SK.peri}}/>
@@ -910,6 +916,92 @@ function DateFmtPanel({ fmt, setFmt }) {
             <span style={{fontFamily:'var(--font-mono)',fontSize:10,color:SK.muted}}>{o==='DD/MM/YYYY'?'01/12/2026':o==='DD/MM/YY'?'01/12/26':'01-Dec-26'}</span>
           </label>
         ))}
+
+      </div>
+    </div>
+  )
+}
+
+// ── StatusFilterPanel — filter by activity status ─────────────────────────────
+// Statuses from API: 'Complete', 'In Progress', 'Not Started'.
+// statusFilter is a Set of statuses to SHOW (empty Set = show all).
+function StatusFilterPanel({ statusFilter, setStatusFilter }) {
+  const ALL_STATUSES = [
+    { value: 'Not Started', label: 'Not Started', color: '#CBD5E1' },
+    { value: 'In Progress', label: 'In Progress', color: SK.warn     },
+    { value: 'Complete',    label: 'Complete',    color: SK.pass     },
+  ]
+
+  function toggle(val) {
+    setStatusFilter(prev => {
+      const next = new Set(prev)
+      if (next.has(val)) next.delete(val)
+      else next.add(val)
+      return next
+    })
+  }
+
+  // All selected = no filter active (same as empty set)
+  const allOn = statusFilter.size === 0 || statusFilter.size === ALL_STATUSES.length
+
+  return (
+    <div style={dropStyle(220)}>
+      <div style={{padding:'12px 14px'}}>
+        <div style={{fontFamily:'var(--font-head)',fontWeight:700,fontSize:10,textTransform:'uppercase',letterSpacing:'0.07em',color:SK.muted,marginBottom:8}}>Activity Status</div>
+
+        {/* Show All shortcut */}
+        <div
+          onClick={()=>setStatusFilter(new Set())}
+          style={{
+            display:'flex',alignItems:'center',gap:8,padding:'5px 0',
+            cursor:'pointer',marginBottom:4,
+          }}
+        >
+          <div style={{
+            width:14,height:14,borderRadius:3,flexShrink:0,border:`2px solid ${allOn?SK.peri:SK.border}`,
+            background:allOn?SK.peri:'transparent',
+            display:'flex',alignItems:'center',justifyContent:'center',
+          }}>
+            {allOn&&<span style={{color:'#fff',fontSize:8,lineHeight:1}}>✓</span>}
+          </div>
+          <span style={{fontFamily:'var(--font-body)',fontSize:12,color:SK.text,flex:1}}>Show All</span>
+        </div>
+
+        <div style={{height:1,background:SK.border,margin:'4px 0 8px'}}/>
+
+        {/* Individual status toggles */}
+        {ALL_STATUSES.map(({value,label,color})=>{
+          const isOn = statusFilter.size===0 || statusFilter.has(value)
+          return (
+            <div
+              key={value}
+              onClick={()=>toggle(value)}
+              style={{display:'flex',alignItems:'center',gap:8,padding:'5px 0',cursor:'pointer'}}
+            >
+              <div style={{
+                width:14,height:14,borderRadius:3,flexShrink:0,
+                border:`2px solid ${isOn?color:SK.border}`,
+                background:isOn?color:'transparent',
+                display:'flex',alignItems:'center',justifyContent:'center',
+              }}>
+                {isOn&&<span style={{color:'#fff',fontSize:8,lineHeight:1}}>✓</span>}
+              </div>
+              <span style={{width:8,height:8,borderRadius:'50%',background:color,flexShrink:0,display:'inline-block'}}/>
+              <span style={{fontFamily:'var(--font-body)',fontSize:12,color:SK.text,flex:1}}>{label}</span>
+            </div>
+          )
+        })}
+
+        {/* Active filter summary */}
+        {statusFilter.size > 0 && statusFilter.size < ALL_STATUSES.length && (
+          <div style={{
+            marginTop:10,padding:'5px 8px',borderRadius:5,
+            background:`${SK.peri}0C`,border:`1px solid ${SK.peri}30`,
+            fontFamily:SK.fMono,fontSize:9,color:SK.peri,
+          }}>
+            Showing: {[...statusFilter].join(', ')}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1604,18 +1696,33 @@ export default function ScheduleView({ onNavigate }) {
   const rowHeight = 26
   const { analysis } = useAnalysis()
 
-  const [cols,       setCols]       = useState(DEFAULT_COLS.map(c=>({...c})))
-  const [collapsed,  setCollapsed]  = useState(new Set())
-  const [wbsHidden,  setWbsHidden]  = useState(new Set())
-  const [hideEmpty,  setHideEmpty]  = useState(false)
-  const [showWbsBands, setShowWbsBands] = useState(true)
-  const [showWbsId,  setShowWbsId]  = useState(false)
-  const [filterText, setFilterText] = useState('')
-  const [critOnly,   setCritOnly]   = useState(false)
-  const [selectedId, setSelectedId] = useState(null)
-  const [activeColKey, setActiveColKey] = useState('id')
-  const [durUnit,    setDurUnit]    = useState('Days')
-  const [dateFmt,    setDateFmt]    = useState('DD-Mon-YY')
+  // ── Scene state — read from SceneContext (persists across nav) ─────────────
+  // SceneContext is the single source of truth for all view-layout preferences.
+  // ScheduleView no longer owns these as local useState — it reads from context
+  // so the active scene survives navigation to Upload / Health Check and back.
+  const {
+    cols,         setCols,
+    critOnly,     setCritOnly,
+    showWbsBands, setShowWbsBands,
+    hideEmpty,    setHideEmpty,
+    showWbsId,    setShowWbsId,
+    durUnit,      setDurUnit,
+    dateFmt,      setDateFmt,
+    tweaks:       sceneTweaks, setTweaks: setSceneTweaks, setTweak: setSceneTweak,
+  } = useScene()
+
+  // Local UI state — NOT part of a Scene (transient / session-only)
+  const [collapsed,    setCollapsed]  = useState(new Set())   // WBS expand/collapse per-schedule
+  const [wbsHidden,    setWbsHidden]  = useState(new Set())   // WBS filter visibility
+  const [filterText,   setFilterText] = useState('')          // search box text
+  const [selectedId,   setSelectedId] = useState(null)        // highlighted row
+  const [activeColKey, setActiveColKey] = useState('id')      // keyboard nav column
+
+  // Scene Manager visibility
+  const [showSceneManager, setShowSceneManager] = useState(false)
+  // Status filter — Set of statuses to show; empty = show all
+  const [statusFilter, setStatusFilter] = useState(new Set())
+  const scenesBtnRef = useRef(null)
   const [relPanelH,  setRelPanelH]  = useState(220)
   const [tablePxW,   setTablePxW]   = useState(DEFAULT_TABLE_W)
   // Relationship panel — header is always visible; relOpen controls body expand/collapse.
@@ -1626,25 +1733,12 @@ export default function ScheduleView({ onNavigate }) {
   const [ganttW,     setGanttW]     = useState(GANTT_W_DEFAULT)
   // Customise panel visibility
   const [showCustomise, setShowCustomise] = useState(false)
-  // Tweaks — all Customise panel settings in one object for clean prop-passing
-  const [tweaks, setTweaks] = useState({
-    rowHeight:      26,
-    rowStripes:     true,
-    barStyle:       'filled',   // 'filled' | 'outline'
-    barScheme:      'pastel',   // 'pastel' | 'vivid'
-    barOpacity:     85,         // %
-    barCornerRadius:3,          // px
-    showBarLabels:  false,
-    showWbsBars:    true,
-    criticalHighlight: true,
-    milestoneSize:  7,          // px (diamond half-size)
-    showBaselineBars: true,
-    showStatusIcons: true,      // show status dot in Activity Name column
-    wbsIntensity:   25,         // 0-100 — WBS band colour intensity (alpha strength)
-    showRelConnectors: false,   // show FS relationship lines on Gantt
-    
-  })
-  const setTweak = (key, val) => setTweaks(prev => ({...prev, [key]: val}))
+
+  // Tweaks — alias to SceneContext so Customise panel changes are captured in scene state.
+  // setTweak writes through the context, which marks the active scene as unsaved.
+  const tweaks   = sceneTweaks
+  const setTweaks = setSceneTweaks
+  const setTweak  = setSceneTweak
   const liveRowHeight = tweaks.rowHeight ?? rowHeight
   const tableFontSize = Math.max(10, Math.min(14, Math.round(liveRowHeight * 0.46)))
   // WBS bands are section headers — 1px larger than activity rows, same scaling formula, capped at 14
@@ -1863,11 +1957,28 @@ export default function ScheduleView({ onNavigate }) {
   }, [rawActivities])
   const wbsNodes = rawWbs&&rawWbs.length>0?rawWbs:[]
 
+  // ── Reset to Default Scene on new schedule upload ─────────────────────────
+  // Fires only when source_filename changes — i.e. a new file was uploaded.
+  // Does NOT fire on nav away/back (filename doesn't change in that case).
+  const { resetToDefault } = useScene()
+  const lastFilenameRef = useRef(null)
+  useEffect(() => {
+    const newFile = analysis?.source_filename
+    if (!newFile) return
+    if (lastFilenameRef.current !== null && lastFilenameRef.current !== newFile) {
+      // Genuinely new file — apply Default scene
+      resetToDefault()
+    }
+    lastFilenameRef.current = newFile
+  }, [analysis?.source_filename, resetToDefault])
+
   // ── FIX #2: Hide empty WBS — lookahead algorithm ──────────────────────────
   function hasVisibleTasks(wbsId) {
     const lc = filterText.toLowerCase()
     const match = (a) => {
       if(critOnly && !a.critical) return false
+      // Status filter — only exclude when filter is active (non-empty) and status not selected
+      if(statusFilter.size > 0 && statusFilter.size < 3 && !statusFilter.has(a.status)) return false
       if(wbsHidden.has(a.wbs)) return false
       if(lc) return a.id.toLowerCase().includes(lc)||a.name.toLowerCase().includes(lc)
       return true
@@ -1882,6 +1993,8 @@ export default function ScheduleView({ onNavigate }) {
     const lc = filterText.toLowerCase()
     const match = (a) => {
       if(critOnly && !a.critical) return false
+      // Status filter — only exclude when filter is active (non-empty) and status not selected
+      if(statusFilter.size > 0 && statusFilter.size < 3 && !statusFilter.has(a.status)) return false
       if(wbsHidden.has(a.wbs)) return false
       if(lc) return a.id.toLowerCase().includes(lc)||a.name.toLowerCase().includes(lc)
       return true
@@ -1889,10 +2002,11 @@ export default function ScheduleView({ onNavigate }) {
     const actsByWbs = {}
     activities.forEach(a=>{ const k=a.wbs||'__none__'; if(!actsByWbs[k])actsByWbs[k]=[]; actsByWbs[k].push(a) })
 
-    // FIX #3: Critical-only shows flat waterfall, no WBS bands
-    if(critOnly) {
-      return activities.filter(match).sort((a,b)=>(a.start||'').localeCompare(b.start||'')).map(a=>({_type:'task',...a}))
-    }
+    // Critical-only: keep WBS bands so grouping is visible.
+    // The match() function already filters non-critical tasks, so the normal
+    // walk() below naturally omits them. WBS bands remain visible (controlled
+    // by showWbsBands toggle in Grouping panel, same as Show All mode).
+    // If showWbsBands is off, the walk still runs but renderBand=false — flat list.
 
     // Compute the deepest WBS level that has direct activities (globally).
     // Used to avoid rendering empty structural bands beyond the activity level.
@@ -1933,7 +2047,7 @@ export default function ScheduleView({ onNavigate }) {
     })
     ;(actsByWbs['__none__']||[]).filter(match).forEach(a=>result.push({_type:'task',...a}))
     return result
-  },[wbsNodes,activities,collapsed,wbsHidden,hideEmpty,showWbsBands,filterText,critOnly])
+  },[wbsNodes,activities,collapsed,wbsHidden,hideEmpty,showWbsBands,filterText,critOnly,statusFilter])
 
   // WBS rollup — for each WBS node, aggregate all descendant TASK values.
   // start = earliest, finish = latest, rem_dur / orig_dur = sum,
@@ -2015,7 +2129,7 @@ export default function ScheduleView({ onNavigate }) {
       case 'status':      return a.status??''
       case 'type':        return a.type??''
       case 'num_activities': {
-        return (relsBySuccId[a.id]?.length || 0) + (relsByPredId[a.id]?.length || 0)
+        return 1  // task row = 1 activity; WBS rows sort by ext.count in their own path
       }
       case 'budget_units':    return a.budget_units    ?? -1
       case 'actual_units':    return a.actual_units    ?? -1
@@ -2040,8 +2154,8 @@ export default function ScheduleView({ onNavigate }) {
       if(av<bv) return -sortDir; if(av>bv) return sortDir; return 0
     })
 
-    // In critOnly mode or no WBS bands — just return flat sorted list
-    if(critOnly || !showWbsBands || !rows.some(r=>r._type==='wbs')) return sorted
+    // No WBS bands in data — just return flat sorted list
+    if(!showWbsBands || !rows.some(r=>r._type==='wbs')) return sorted
 
     // With WBS bands — rebuild the interleaved structure using the globally sorted
     // task order. Walk rows in original order, replace each task slot with the
@@ -2192,10 +2306,11 @@ export default function ScheduleView({ onNavigate }) {
       case 'exp_finish':  return act.exp_finish ? fmtDate(act.exp_finish, dateFmt) : '—'
 
       // ── # Activities ─────────────────────────────────────────────────────
-      // Count of direct predecessor + successor relationships for this activity.
-      // Computed client-side from the relationships array — no backend change needed.
+      // Task row = always 1 (it is one activity).
+      // WBS band rows show descendant activity count via ext.count — handled
+      // in the WBS render path below, not here.
       case 'num_activities': {
-        return String((relsBySuccId[act.id]?.length || 0) + (relsByPredId[act.id]?.length || 0))
+        return '1'
       }
 
       // ── Units ─────────────────────────────────────────────────────────────
@@ -2758,16 +2873,25 @@ export default function ScheduleView({ onNavigate }) {
           panel={<ColMgrPanel cols={cols} setCols={setCols}/>}
         />
 
-        {/* Duration Units */}
+        {/* Status filter — between Columns and Formats */}
         <HoverPanel
-          trigger={(open)=><PillBtn active={open}>⏱ {durUnit}</PillBtn>}
-          panel={<DurUnitPanel unit={durUnit} setUnit={setDurUnit}/>}
+          trigger={(open)=>(
+            <PillBtn active={open||statusFilter.size>0}>
+              ◉ Status
+              {statusFilter.size>0&&statusFilter.size<3&&(
+                <span style={{fontFamily:'var(--font-mono)',fontSize:9,background:SK.peri,color:'#fff',borderRadius:3,padding:'1px 4px',marginLeft:2}}>
+                  {statusFilter.size}
+                </span>
+              )}
+            </PillBtn>
+          )}
+          panel={<StatusFilterPanel statusFilter={statusFilter} setStatusFilter={setStatusFilter}/>}
         />
 
-        {/* Date Format */}
+        {/* Formats — consolidated Duration Units + Date Format */}
         <HoverPanel
-          trigger={(open)=><PillBtn active={open}>{dateFmt}</PillBtn>}
-          panel={<DateFmtPanel fmt={dateFmt} setFmt={setDateFmt}/>}
+          trigger={(open)=><PillBtn active={open}>⏱ Formats</PillBtn>}
+          panel={<FormatsPanel unit={durUnit} setUnit={setDurUnit} fmt={dateFmt} setFmt={setDateFmt}/>}
         />
           {/* Search */}
           <div style={{position:'relative',marginLeft:4}}>
@@ -2939,6 +3063,36 @@ export default function ScheduleView({ onNavigate }) {
             </div>
           )}
         </div>
+
+        {/* ⊞ Scenes button — between As-of chip and ⚙ cog */}
+        <div style={{display:'flex',alignItems:'center',padding:'0 4px',flexShrink:0,position:'relative'}}>
+          <button
+            ref={scenesBtnRef}
+            onClick={()=>setShowSceneManager(v=>!v)}
+            title="Scene Manager — save and load view layouts"
+            style={{
+              display:'flex',alignItems:'center',gap:5,
+              height:30,padding:'0 10px',
+              fontFamily:SK.fHead,fontWeight:700,fontSize:10,
+              color:showSceneManager?SK.peri:SK.muted,
+              background:showSceneManager?`${SK.peri}14`:SK.card,
+              border:`1px solid ${showSceneManager?SK.peri:SK.border}`,
+              borderRadius:6,cursor:'pointer',transition:'all 0.15s',
+              whiteSpace:'nowrap',
+            }}>
+            <span style={{fontSize:13,lineHeight:1}}>⊞</span>
+            <span>Scenes</span>
+          </button>
+
+          {/* Scene Manager popover — renders below button, closes on outside click */}
+          {showSceneManager && (
+            <SceneManager
+              onClose={()=>setShowSceneManager(false)}
+              btnRef={scenesBtnRef}
+            />
+          )}
+        </div>
+
 
         {/* ⚙ Customise cog button — right edge of toolbar */}
         <div style={{display:'flex',alignItems:'center',padding:'0 8px',flexShrink:0}}>
@@ -3418,8 +3572,8 @@ export default function ScheduleView({ onNavigate }) {
                     <g>
                       <line x1={x} y1={0} x2={x} y2={totalH}
                         stroke={SK.cyan} strokeWidth={2} strokeDasharray="5 4" opacity={0.9}/>
-                      <rect x={x+3} y={4} width={70} height={16} rx={3} fill={SK.cyan} opacity={0.12}/>
-                      <text x={x+7} y={15} fontSize={9} fill={SK.cyan} fontFamily={SK.fMono} fontWeight={600}>As-of Date</text>
+                      <rect x={x+3} y={4} width={70} height={16} rx={3} fill={'#475569'} opacity={0.75}/>
+                      <text x={x+7} y={15} fontSize={9} fill={'#ffffff'} fontFamily={SK.fMono} fontWeight={600}>As-of Date</text>
                     </g>
                   )
                 })()}
@@ -3464,12 +3618,12 @@ export default function ScheduleView({ onNavigate }) {
               { section:'ROWS', items:[
                 { type:'slider', label:'Row height',          key:'rowHeight',    min:20, max:48, step:2 },
                 { type:'slider', label:'Colour intensity',    key:'wbsIntensity', min:0, max:100, step:5, unit:'%' },
+                { type:'radio',  label:'Colour scheme',       key:'barScheme',  options:[{v:'pastel',l:'Pastel'},{v:'vivid',l:'Vivid'}] },
                 { type:'toggle', label:'Striped rows',        key:'rowStripes' },
                 { type:'toggle', label:'Status icons in name',key:'showStatusIcons' },
               ]},
               { section:'GANTT BARS', items:[
                 { type:'radio',  label:'Bar style',           key:'barStyle',   options:[{v:'filled',l:'Filled'},{v:'outline',l:'Outline'}] },
-                { type:'radio',  label:'Colour scheme',       key:'barScheme',  options:[{v:'pastel',l:'Pastel'},{v:'vivid',l:'Vivid'}] },
                 { type:'slider', label:'Fill opacity',        key:'barOpacity', min:20, max:100, step:5, unit:'%' },
                 { type:'slider', label:'Corner radius',       key:'barCornerRadius', min:0, max:8, step:1, unit:'px' },
                 { type:'toggle', label:'Activity labels on bars', key:'showBarLabels' },

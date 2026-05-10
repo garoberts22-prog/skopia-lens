@@ -146,24 +146,23 @@ function fmtThreshold(check) {
 // ── Compact check card ────────────────────────────────────────────────────────
 function CheckCard({ check, onClick, settings, onSettingsChange, onRerun, isDirty }) {
   const sc = statusColour(check.status)
-  const [hov, setHov] = useState(false)
-
   const isDisabled = settings?.disabled === true
 
   return (
+    
+   
     <div
       onClick={() => !isDisabled && onClick(check)}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
       style={{
+
         background:   SK.card,
-        border:       `1px solid ${hov && !isDisabled ? SK.peri : SK.border}`,
+        border: `1px solid ${SK.border}`,
         borderRadius: 10,
         padding:      '10px 12px',
         cursor:       isDisabled ? 'default' : 'pointer',
         opacity:      isDisabled ? 0.45 : 1,
         transition:   'border-color 0.12s, box-shadow 0.12s',
-        boxShadow:    hov && !isDisabled ? '0 2px 10px rgba(74,111,232,0.12)' : '0 1px 3px rgba(0,0,0,0.04)',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
         display:      'flex',
         flexDirection:'column',
         gap:          4,
@@ -366,7 +365,7 @@ export default function HealthCheckView({ onNavigate }) {
           {/* Stat tiles — 3×2 grid */}
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gridTemplateRows: 'repeat(2,1fr)', gap: 8 }}>
             {[
-              { l: 'Total Activities', v: s.total_activities },
+              { l: 'Total Activities', v: analysis.schedule_data?.activities?.length ?? s.total_activities },
               { l: 'Incomplete',       v: s.incomplete_tasks },
               { l: 'Complete',         v: s.completed_tasks },
               { l: 'In Progress',      v: s.in_progress_tasks },

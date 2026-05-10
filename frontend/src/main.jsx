@@ -6,7 +6,10 @@
 //   1. Import the SKOPIA theme CSS (CSS variables + Tailwind base + Google Fonts)
 //   2. Wrap the whole app in <AnalysisProvider> so every component can access
 //      the analysis state via useAnalysis()
-//   3. Mount <App> into the #root div in index.html
+//   3. Wrap inside <SceneProvider> so ScheduleView can access scene state via
+//      useScene() — SceneProvider sits inside AnalysisProvider (no dependency
+//      on AnalysisContext, but keeps providers co-located for clarity)
+//   4. Mount <App> into the #root div in index.html
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -16,8 +19,9 @@ import { createRoot } from 'react-dom/client'
 // ── Theme first — imports Google Fonts + CSS variables + Tailwind directives
 import './styles/theme.css'
 
-// ── Context provider — must wrap App so all child components can use useAnalysis()
+// ── Context providers
 import { AnalysisProvider } from './context/AnalysisContext'
+import { SceneProvider }    from './context/SceneContext'
 
 // ── Root component
 import App from './App'
@@ -28,7 +32,9 @@ import App from './App'
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <AnalysisProvider>
-      <App />
+      <SceneProvider>
+        <App />
+      </SceneProvider>
     </AnalysisProvider>
   </StrictMode>
 )

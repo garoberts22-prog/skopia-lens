@@ -573,14 +573,7 @@ export default function App() {
             }}>
               {analysis.source_format?.toUpperCase()}
             </span>
-            {analysis.data_date && (
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#94a3b8', background: '#1a2a3a', border: '1px solid #334155', borderRadius: 4, padding: '2px 8px', flexShrink: 0 }}>
-                DD: {fmtDataDate(analysis.data_date)}
-              </span>
-            )}
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: '#64748b', flexShrink: 0 }}>
-              {analysis.summary_stats?.total_activities} activities
-            </span>
+
           </>}
 
           <div style={{ flex: 1 }} />
