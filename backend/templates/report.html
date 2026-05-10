@@ -4,44 +4,52 @@
 <meta charset="UTF-8">
 <style>
   /*
-   * SKOPIA Lens — PDF Report Template (v1.0)
-   * Rendered server-side by WeasyPrint from a Jinja2 template.
+   * SKOPIA Lens — PDF Report Template (v2.0)
    *
-   * DESIGN RULES:
-   *   - @page sets A4 landscape (297 × 210 mm) with 12mm margins
-   *   - No CSS grid — WeasyPrint support is partial; use flex + table
-   *   - No border-image or background-clip text — not supported in WeasyPrint
-   *   - Gradient accents are rendered as inline SVG (most reliable cross-engine)
-   *   - Fonts loaded from Google Fonts CDN (requires internet at render time)
-   *   - All colours reference SKOPIA brand tokens defined in :root
+   * SECTION ORDER (matches Report Wizard):
+   *   ① Cover, Grade & Stats   — header, grade ring, stat tiles, DCMA checks table + sidebar
+   *   ② Schedule (Table)        — full activity listing with start/finish/duration/float/status
+   *   ③ Critical Path Trace     — ordered longest-path activities
+   *   ④ Analytics               — float histogram, relationship breakdown, bottleneck top-10
+   *
+   * WEASYPRINT CONSTRAINTS (strictly followed):
+   *   - No CSS Grid (partial support only — use flex + table instead)
+   *   - No -webkit-background-clip: text (gradient text not supported)
+   *   - No border-image
+   *   - Gradients on background: work fine on block elements
+   *   - @page running headers/footers: supported
+   *   - SVG inline: supported
+   *   - Fonts via Google CDN: supported (requires outbound internet at render time)
    */
 
   @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Open+Sans:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
+  /* ── PAGE SETUP ─────────────────────────────────────────────────────────── */
+
   @page {
     size: A4 landscape;
-    margin: 12mm 14mm 14mm 14mm;
+    margin: 10mm 12mm 14mm 12mm;
 
-    /* Running footer on every page */
     @bottom-left {
       content: "SKOPIA Lens  ·  Schedule Health Report  ·  Confidential";
       font-family: 'Open Sans', Arial, sans-serif;
-      font-size: 7pt;
+      font-size: 6.5pt;
       color: #9CA3AF;
     }
     @bottom-right {
       content: "Page " counter(page) " of " counter(pages);
       font-family: 'JetBrains Mono', monospace;
-      font-size: 7pt;
+      font-size: 6.5pt;
       color: #9CA3AF;
     }
   }
 
-  /* First page — no running footer (covered by doc footer block) */
   @page :first {
-    @bottom-left { content: ""; }
+    @bottom-left  { content: ""; }
     @bottom-right { content: ""; }
   }
+
+  /* ── BRAND TOKENS ───────────────────────────────────────────────────────── */
 
   :root {
     --sk-cyan:   #1EC8D4;
@@ -57,27 +65,24 @@
     --sk-warn:   #D97706;
     --sk-fail:   #DC2626;
     --sk-info:   #2563EB;
+    --grad:      linear-gradient(to right, #1EC8D4, #4A6FE8, #2A4DCC);
   }
 
-  * {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 9pt;
+    font-size: 8.5pt;
     color: var(--sk-text);
     background: var(--sk-bg);
     line-height: 1.5;
   }
 
-  /* ── COVER HEADER ───────────────────────────────────────────────────────── */
+  /* ── DOCUMENT HEADER ────────────────────────────────────────────────────── */
 
   .doc-header {
     background: var(--sk-header);
-    padding: 18px 20px 16px;
+    padding: 16px 20px 14px;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
@@ -86,85 +91,78 @@
   }
 
   .wordmark {
-    /* WeasyPrint doesn't support -webkit-background-clip text.
-       Use flat blue as the fallback — still on-brand. */
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 26pt;
+    font-size: 24pt;
     font-weight: 900;
-    color: var(--sk-cyan);   /* cyan — closest single-stop to gradient start */
+    color: var(--sk-cyan);
     letter-spacing: -0.5px;
     line-height: 1;
   }
 
   .wordmark-tier {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 8pt;
+    font-size: 7.5pt;
     color: #8896A7;
     margin-top: 3px;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.4px;
   }
 
   .doc-meta {
     text-align: right;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 8pt;
+    font-size: 7.5pt;
     color: #8896A7;
-    line-height: 2;
+    line-height: 1.9;
   }
 
-  .doc-meta strong {
-    color: #E2E8F0;
-  }
+  .doc-meta strong { color: #E2E8F0; }
 
-  /* Gradient accent strip — rendered as block element (WeasyPrint safe) */
   .grad-strip {
     height: 4px;
-    background: linear-gradient(to right, #1EC8D4, #4A6FE8, #2A4DCC);
-    margin-bottom: 20px;
+    background: var(--grad);
+    margin-bottom: 16px;
   }
 
-  /* ── SECTION TITLES ─────────────────────────────────────────────────────── */
-
-  .section {
-    margin-bottom: 18px;
-    page-break-inside: avoid;
-  }
+  /* ── SECTION HEADERS ────────────────────────────────────────────────────── */
 
   .section-title {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 10pt;
+    font-size: 9pt;
     font-weight: 700;
     color: var(--sk-text);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.07em;
     padding-bottom: 5px;
     border-bottom: 2px solid var(--sk-border);
     margin-bottom: 10px;
   }
 
-  .section-title .section-accent {
-    /* Coloured left pip instead of gradient text */
+  .section-pip {
     display: inline-block;
     width: 4px;
-    height: 12px;
+    height: 11px;
     background: var(--sk-cyan);
     border-radius: 2px;
     margin-right: 8px;
     vertical-align: middle;
   }
 
-  /* ── SUMMARY ROW ────────────────────────────────────────────────────────── */
+  .page-section {
+    page-break-before: always;
+    margin-bottom: 16px;
+  }
+
+  /* ── ① COVER: GRADE RING + STAT TILES ──────────────────────────────────── */
 
   .summary-row {
     display: flex;
-    gap: 12px;
-    margin-bottom: 18px;
+    gap: 10px;
+    margin-bottom: 16px;
     page-break-inside: avoid;
   }
 
-  /* Grade ring cell — left */
   .grade-cell {
-    flex: 0 0 120px;
+    flex: 0 0 110px;
     background: var(--sk-card);
     border: 1px solid var(--sk-border);
     border-radius: 8px;
@@ -172,52 +170,51 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 14px 10px;
+    padding: 12px 8px;
   }
 
   .grade-letter {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 38pt;
+    font-size: 36pt;
     font-weight: 900;
     line-height: 1;
   }
 
   .grade-score {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 11pt;
+    font-size: 10pt;
     font-weight: 500;
     margin-top: 2px;
   }
 
   .grade-label {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 7pt;
+    font-size: 6.5pt;
     color: var(--sk-muted);
     margin-top: 4px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
 
-  /* Stat tiles — right */
   .stat-tiles {
     flex: 1;
     display: flex;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
   }
 
   .stat-tile {
-    flex: 1 1 80px;
+    flex: 1 1 75px;
     background: var(--sk-card);
     border: 1px solid var(--sk-border);
     border-radius: 6px;
-    padding: 10px 10px 8px;
-    min-width: 70px;
+    padding: 8px 10px 7px;
+    min-width: 65px;
   }
 
   .stat-value {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 15pt;
+    font-size: 14pt;
     font-weight: 500;
     color: var(--sk-text);
     line-height: 1.1;
@@ -226,67 +223,63 @@
 
   .stat-label {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 7pt;
+    font-size: 6.5pt;
     color: var(--sk-muted);
-    margin-top: 3px;
+    margin-top: 2px;
     line-height: 1.3;
   }
 
-  /* ── CHECKS TABLE ───────────────────────────────────────────────────────── */
+  /* ── ① COVER: CHECKS TABLE + SIDEBAR ───────────────────────────────────── */
+
+  .two-col {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .two-col-main { flex: 2; }
+  .two-col-side  { flex: 1; min-width: 140px; }
 
   .checks-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 8.5pt;
-    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 7.5pt;
   }
 
   .checks-table thead th {
     background: var(--sk-header);
     color: #E2E8F0;
-    padding: 7px 8px;
+    padding: 6px 7px;
     text-align: left;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 7pt;
+    font-size: 6.5pt;
     text-transform: uppercase;
     letter-spacing: 0.07em;
     font-weight: 400;
   }
 
-  .checks-table thead th:first-child {
-    border-radius: 4px 0 0 0;
-  }
+  .checks-table thead th:last-child { text-align: right; }
 
-  .checks-table thead th:last-child {
-    border-radius: 0 4px 0 0;
-    text-align: right;
-  }
-
-  .checks-table tbody tr:nth-child(even) td {
-    background: #FAFBFF;
-  }
+  .checks-table tbody tr:nth-child(even) td { background: #FAFBFF; }
 
   .checks-table tbody td {
-    padding: 6px 8px;
+    padding: 5px 7px;
     border-bottom: 1px solid var(--sk-border);
     vertical-align: middle;
   }
 
-  .checks-table td:last-child {
-    text-align: right;
-  }
+  .checks-table td:last-child { text-align: right; }
 
-  /* Status dot + text in same cell */
   .check-status-cell {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     white-space: nowrap;
   }
 
   .status-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     flex-shrink: 0;
     display: inline-block;
@@ -307,7 +300,7 @@
     background: #EFF6FF;
     color: var(--sk-info);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 6.5pt;
+    font-size: 6pt;
     font-weight: 500;
     padding: 1px 5px;
     border-radius: 3px;
@@ -316,19 +309,18 @@
 
   .metric-mono {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 8pt;
+    font-size: 7pt;
   }
 
-  /* Score bar in table */
   .score-bar-wrap {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     justify-content: flex-end;
   }
 
   .score-bar-bg {
-    width: 50px;
+    width: 44px;
     height: 5px;
     background: var(--sk-border);
     border-radius: 3px;
@@ -342,181 +334,70 @@
 
   .score-text {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 7.5pt;
+    font-size: 7pt;
     color: var(--sk-muted);
-    min-width: 28px;
+    min-width: 24px;
     text-align: right;
   }
 
-  /* ── LONGEST PATH TABLE ─────────────────────────────────────────────────── */
-
-  .path-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 7.5pt;
-    font-family: 'Open Sans', Arial, sans-serif;
-    page-break-before: always;
-  }
-
-  .path-table thead th {
-    background: var(--sk-header);
-    color: #E2E8F0;
-    padding: 6px 8px;
-    text-align: left;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 6.5pt;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    font-weight: 400;
-  }
-
-  .path-table thead th:last-child { text-align: right; }
-
-  .path-table tbody tr:nth-child(even) td {
-    background: #FAFBFF;
-  }
-
-  .path-table tbody td {
-    padding: 5px 8px;
-    border-bottom: 1px solid var(--sk-border);
-    vertical-align: middle;
-  }
-
-  .path-table td:last-child { text-align: right; }
-
-  .critical-row td {
-    background: #FFF5F5 !important;
-  }
-
-  .milestone-marker {
-    font-size: 7pt;
-    color: var(--sk-peri);
-    font-family: 'JetBrains Mono', monospace;
-  }
-
-  /* ── CALLOUT BOXES ──────────────────────────────────────────────────────── */
-
-  .callout {
-    border-radius: 5px;
-    padding: 10px 12px;
-    margin: 8px 0;
-    font-size: 8.5pt;
-    page-break-inside: avoid;
-  }
-
-  .callout-warn {
-    background: #FFFBEB;
-    border-left: 4px solid var(--sk-warn);
-    color: #78350F;
-  }
-
-  .callout-info {
-    background: #EFF6FF;
-    border-left: 4px solid var(--sk-info);
-    color: #1E3A8A;
-  }
-
-  .callout-pass {
-    background: #F0FDF4;
-    border-left: 4px solid var(--sk-pass);
-    color: #14532D;
-  }
-
-  /* ── DOC FOOTER (page 1 only) ───────────────────────────────────────────── */
-
-  .doc-footer {
-    margin-top: 20px;
-    padding-top: 8px;
-    border-top: 1px solid var(--sk-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 7pt;
-    color: var(--sk-muted);
-  }
-
-  /* ── TWO-COLUMN LAYOUT (checks + summary) ───────────────────────────────── */
-
-  .two-col {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 18px;
-    page-break-inside: avoid;
-  }
-
-  .two-col-main {
-    flex: 2;
-  }
-
-  .two-col-side {
-    flex: 1;
-  }
-
-  /* Summary card in sidebar */
+  /* Sidebar cards */
   .summary-card {
     background: var(--sk-card);
     border: 1px solid var(--sk-border);
     border-radius: 6px;
-    padding: 12px;
-    margin-bottom: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
     page-break-inside: avoid;
   }
 
   .summary-card-title {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 8pt;
+    font-size: 7pt;
     font-weight: 700;
     color: var(--sk-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    margin-bottom: 8px;
+    margin-bottom: 7px;
   }
 
   .kv-row {
     display: flex;
     justify-content: space-between;
-    padding: 3px 0;
+    padding: 2px 0;
     border-bottom: 1px solid #F3F4F6;
-    font-size: 8pt;
+    font-size: 7.5pt;
   }
 
-  .kv-row:last-child {
-    border-bottom: none;
-  }
-
-  .kv-key {
-    color: var(--sk-muted);
-  }
+  .kv-row:last-child { border-bottom: none; }
+  .kv-key { color: var(--sk-muted); }
 
   .kv-val {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 7.5pt;
+    font-size: 7pt;
     color: var(--sk-text);
     font-weight: 500;
   }
 
-  /* Pass/fail summary counts */
   .result-counts {
     display: flex;
-    gap: 6px;
-    margin-top: 6px;
+    gap: 5px;
+    margin-top: 5px;
   }
 
   .result-pill {
     flex: 1;
     text-align: center;
-    padding: 6px 4px;
+    padding: 5px 4px;
     border-radius: 5px;
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 13pt;
+    font-size: 12pt;
     font-weight: 900;
     line-height: 1;
   }
 
   .result-pill-label {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 6.5pt;
+    font-size: 6pt;
     font-weight: 600;
     margin-top: 2px;
     text-transform: uppercase;
@@ -528,26 +409,311 @@
   .pill-warn { background: #FFFBEB; color: var(--sk-warn); }
   .pill-fail { background: #FEF2F2; color: var(--sk-fail); }
 
-  /* Recommendation block */
+  /* Callout */
+  .callout {
+    border-radius: 5px;
+    padding: 8px 11px;
+    margin: 7px 0;
+    font-size: 7.5pt;
+    page-break-inside: avoid;
+  }
+
+  .callout-warn { background: #FFFBEB; border-left: 4px solid var(--sk-warn); color: #78350F; }
+  .callout-info { background: #EFF6FF; border-left: 4px solid var(--sk-info); color: #1E3A8A; }
+  .callout-pass { background: #F0FDF4; border-left: 4px solid var(--sk-pass); color: #14532D; }
+
   .rec-list {
     margin: 0;
     padding-left: 14px;
-    font-size: 8pt;
+    font-size: 7pt;
     color: var(--sk-text);
     line-height: 1.7;
   }
 
-  .rec-list li {
-    margin-bottom: 2px;
+  /* ── ② SCHEDULE TABLE ───────────────────────────────────────────────────── */
+
+  .schedule-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7pt;
+  }
+
+  .schedule-table thead th {
+    background: var(--sk-header);
+    color: #E2E8F0;
+    padding: 5px 6px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+  }
+
+  .schedule-table thead th.right { text-align: right; }
+  .schedule-table thead th.center { text-align: center; }
+
+  .schedule-table tbody tr:nth-child(even) td { background: #FAFBFF; }
+
+  .schedule-table tbody td {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+    overflow: hidden;
+  }
+
+  /* WBS band row in schedule table */
+  .wbs-row td {
+    background: #EEF2FF !important;
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 7pt;
+    color: var(--sk-peri);
+    padding: 3px 6px;
+    border-bottom: 1px solid #C7D2FE;
+  }
+
+  .wbs-indent {
+    display: inline-block;
+  }
+
+  /* Critical row highlight */
+  .crit-row td {
+    background: #FFF5F5 !important;
+  }
+
+  /* Complete row dim */
+  .done-row td {
+    color: var(--sk-muted) !important;
+  }
+
+  .status-dot-sm {
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-right: 3px;
+  }
+
+  .milestone-sym {
+    color: var(--sk-peri);
+    font-size: 6pt;
+    margin-right: 2px;
+  }
+
+  /* ── ③ CRITICAL PATH TABLE ──────────────────────────────────────────────── */
+
+  .path-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7pt;
+  }
+
+  .path-table thead th {
+    background: var(--sk-header);
+    color: #E2E8F0;
+    padding: 5px 7px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+  }
+
+  .path-table thead th:last-child { text-align: right; }
+
+  .path-table tbody tr:nth-child(even) td { background: #FAFBFF; }
+
+  .path-table tbody td {
+    padding: 4px 7px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+  }
+
+  .path-table td:last-child { text-align: right; }
+
+  .critical-row td { background: #FFF5F5 !important; }
+
+  .milestone-marker {
+    font-size: 6.5pt;
+    color: var(--sk-peri);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── ④ ANALYTICS ────────────────────────────────────────────────────────── */
+
+  /* Float histogram bars — inline block widths driven by inline style */
+  .histogram-wrap {
+    margin-top: 8px;
+  }
+
+  .hist-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+
+  .hist-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+    color: var(--sk-muted);
+    width: 72px;
+    flex-shrink: 0;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .hist-bar-bg {
+    flex: 1;
+    height: 14px;
+    background: var(--sk-border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .hist-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+  }
+
+  .hist-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+    color: var(--sk-text);
+    width: 32px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+
+  /* Analytics two-column layout */
+  .analytics-grid {
+    display: flex;
+    gap: 14px;
+  }
+
+  .analytics-col {
+    flex: 1;
+  }
+
+  .analytics-card {
+    background: var(--sk-card);
+    border: 1px solid var(--sk-border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    page-break-inside: avoid;
+  }
+
+  .analytics-card-title {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 8pt;
+    font-weight: 700;
+    color: var(--sk-text);
+    margin-bottom: 10px;
+  }
+
+  /* Relationship type bar */
+  .rel-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .rel-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7pt;
+    color: var(--sk-muted);
+    width: 32px;
+    flex-shrink: 0;
+  }
+
+  .rel-bar-bg {
+    flex: 1;
+    height: 12px;
+    background: var(--sk-border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .rel-bar-fill {
+    height: 100%;
+    background: var(--sk-peri);
+    border-radius: 3px;
+  }
+
+  .rel-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7pt;
+    color: var(--sk-text);
+    width: 36px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+
+  .rel-pct {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+    color: var(--sk-muted);
+    width: 30px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+
+  /* Bottleneck table */
+  .bottleneck-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7pt;
+  }
+
+  .bottleneck-table thead th {
+    background: var(--sk-bg);
+    color: var(--sk-muted);
+    padding: 5px 6px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+    border-bottom: 2px solid var(--sk-border);
+  }
+
+  .bottleneck-table thead th.right { text-align: right; }
+
+  .bottleneck-table tbody td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+  }
+
+  .bottleneck-table tbody tr:nth-child(even) td { background: #FAFBFF; }
+
+  /* ── DOCUMENT FOOTER ────────────────────────────────────────────────────── */
+
+  .doc-footer {
+    margin-top: 16px;
+    padding-top: 7px;
+    border-top: 1px solid var(--sk-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+    color: var(--sk-muted);
   }
 
 </style>
 </head>
 <body>
 
-<!-- ══════════════════════════════════════════════════════════════════════════
-     HEADER
-═══════════════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════════════════════════════════════════════════════════════════
+     DOCUMENT HEADER
+════════════════════════════════════════════════════════════════════════════ -->
 <div class="doc-header">
   <div>
     <div class="wordmark">SKOPIA.</div>
@@ -562,19 +728,17 @@
 <div class="grad-strip"></div>
 
 
-<!-- ══════════════════════════════════════════════════════════════════════════
-     SUMMARY ROW — Grade ring + stat tiles
-═══════════════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════════════════════════════════════════════════════════════════
+     ① COVER — GRADE RING + STAT TILES
+════════════════════════════════════════════════════════════════════════════ -->
 <div class="summary-row">
 
-  <!-- Grade Ring -->
   <div class="grade-cell">
     <div class="grade-letter" style="color: {{ grade_colour }};">{{ overall_grade }}</div>
-    <div class="grade-score" style="color: {{ grade_colour }};">{{(overall_score or 0)  }}%</div>
+    <div class="grade-score"  style="color: {{ grade_colour }};">{{ overall_score }}%</div>
     <div class="grade-label">Overall Score</div>
   </div>
 
-  <!-- Stat Tiles -->
   <div class="stat-tiles">
     <div class="stat-tile">
       <span class="stat-value">{{ summary_stats.total_activities | format_num }}</span>
@@ -582,11 +746,15 @@
     </div>
     <div class="stat-tile">
       <span class="stat-value">{{ summary_stats.incomplete_tasks | format_num }}</span>
-      <span class="stat-label">Incomplete Tasks</span>
+      <span class="stat-label">Incomplete</span>
     </div>
     <div class="stat-tile">
       <span class="stat-value">{{ summary_stats.completed_tasks | format_num }}</span>
-      <span class="stat-label">Completed</span>
+      <span class="stat-label">Complete</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-value">{{ summary_stats.in_progress_tasks | format_num }}</span>
+      <span class="stat-label">In Progress</span>
     </div>
     <div class="stat-tile">
       <span class="stat-value">{{ summary_stats.milestones | format_num }}</span>
@@ -605,27 +773,27 @@
 </div>
 
 
-<!-- ══════════════════════════════════════════════════════════════════════════
-     TWO-COLUMN: Checks table (left) + Summary card (right)
-═══════════════════════════════════════════════════════════════════════════ -->
+<!-- ════════════════════════════════════════════════════════════════════════════
+     ① COVER — DCMA CHECKS TABLE + SIDEBAR
+════════════════════════════════════════════════════════════════════════════ -->
 <div class="two-col">
 
-  <!-- ── LEFT: Health Checks Table ───────────────────────────────────────── -->
+  <!-- Checks table -->
   <div class="two-col-main">
     <div class="section-title">
-      <span class="section-accent"></span>DCMA Health Checks
+      <span class="section-pip"></span>DCMA Health Checks
     </div>
 
     <table class="checks-table">
       <thead>
         <tr>
-          <th style="width: 12%">Ref</th>
-          <th style="width: 26%">Check</th>
-          <th style="width: 14%">Status</th>
-          <th style="width: 22%">Metric</th>
-          <th style="width: 10%">Threshold</th>
-          <th style="width: 8%">Flagged</th>
-          <th style="width: 8%">Score</th>
+          <th style="width:10%">Ref</th>
+          <th style="width:24%">Check</th>
+          <th style="width:12%">Status</th>
+          <th style="width:20%">Metric</th>
+          <th style="width:10%">Threshold</th>
+          <th style="width:8%">Flagged</th>
+          <th style="width:16%">Score</th>
         </tr>
       </thead>
       <tbody>
@@ -646,16 +814,15 @@
             </div>
           </td>
           <td>
-            <span class="metric-mono">{{ check.metric_value | format_metric(check.metric_label) }}</span>
+            <span class="metric-mono">
+              {{ check.metric_value | format_metric(check.metric_label) }}
+            </span>
           </td>
           <td>
             {% if check.threshold_value is not none %}
               <span class="metric-mono">
-                {% if check.metric_label and '%' in check.metric_label %}
-                  ≤{{ check.threshold_value }}%
-                {% else %}
-                  {{ check.threshold_value }}
-                {% endif %}
+                {% if check.metric_label and '%' in check.metric_label %}≤{{ check.threshold_value }}%
+                {% else %}{{ check.threshold_value }}{% endif %}
               </span>
             {% else %}
               <span style="color:var(--sk-muted);">—</span>
@@ -663,9 +830,11 @@
           </td>
           <td style="text-align:right;">
             {% if check.flagged_count > 0 %}
-              <span style="color:var(--sk-fail);font-family:'JetBrains Mono',monospace;font-size:7.5pt;font-weight:600;">{{ check.flagged_count }}</span>
+              <span style="color:var(--sk-fail);font-family:'JetBrains Mono',monospace;font-weight:600;">
+                {{ check.flagged_count }}
+              </span>
             {% else %}
-              <span style="color:var(--sk-pass);font-family:'JetBrains Mono',monospace;font-size:7.5pt;">0</span>
+              <span style="color:var(--sk-pass);font-family:'JetBrains Mono',monospace;">0</span>
             {% endif %}
           </td>
           <td>
@@ -682,14 +851,12 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
 
-  </div><!-- /two-col-main -->
-
-
-  <!-- ── RIGHT: Summary Card ──────────────────────────────────────────────── -->
+  <!-- Sidebar -->
   <div class="two-col-side">
 
-    <!-- Pass / Warn / Fail counts -->
+    <!-- Pass/warn/fail pills -->
     <div class="summary-card">
       <div class="summary-card-title">Check Results</div>
       <div class="result-counts">
@@ -708,7 +875,7 @@
       </div>
     </div>
 
-    <!-- Project Metadata -->
+    <!-- Project details -->
     <div class="summary-card">
       <div class="summary-card-title">Project Details</div>
       {% if schedule_data %}
@@ -725,107 +892,198 @@
         <span class="kv-key">In Progress</span>
         <span class="kv-val">{{ summary_stats.in_progress_tasks }}</span>
       </div>
-        <div class="kv-row">
-  <span class="kv-key">LOE Tasks</span>
-  <span class="kv-val">{{ summary_stats.loe_activities }}</span>
-</div>
-
-<div class="kv-row">
-  <span class="kv-key">Float (mean)</span>
-  <span class="kv-val">
-    {% if float_histogram and float_histogram.mean_float_days is not none %}
-      {{ (float_histogram.mean_float_days or 0) | round(1) }}d
-    {% else %}
-      —
-    {% endif %}
-  </span>
-</div>
-
-<div class="kv-row">
-  <span class="kv-key">Float (median)</span>
-
-        <span class="kv-val">
-        {% if float_histogram and float_histogram.median_float_days is not none %}
-        {{ (float_histogram.median_float_days or 0) | round(1) }}d
-        {% else %}
-          —
-        {% endif %}
-        </span>
-      </div>
-
-</div>
-
-{% if relationship_breakdown %}
-
-<!-- Relationship Breakdown -->
-<div class="summary-card">
-  <div class="summary-card-title">Relationship Types</div>
-
-
-
-
-      {% set rb = relationship_breakdown or {} %}
       <div class="kv-row">
-        <span class="kv-key">FS (Finish-Start)</span>
-        <span class="kv-val">{{ (rb.FS if rb.FS is defined else 0) | format_num }}</span>
+        <span class="kv-key">LOE Tasks</span>
+        <span class="kv-val">{{ summary_stats.loe_activities }}</span>
       </div>
       <div class="kv-row">
-        <span class="kv-key">SS (Start-Start)</span>
-        <span class="kv-val">{{ (rb.SS if rb.SS is defined else 0) | format_num }}</span>
+        <span class="kv-key">Float — Mean</span>
+        <span class="kv-val">{{ float_histogram.mean_float_days | round(1) }}d</span>
       </div>
       <div class="kv-row">
-        <span class="kv-key">FF (Finish-Finish)</span>
-        <span class="kv-val">{{ (rb.FF if rb.FF is defined else 0) | format_num }}</span>
-      </div>
-      <div class="kv-row">
-        <span class="kv-key">SF (Start-Finish)</span>
-        <span class="kv-val" {% if (rb.SF if rb.SF is defined else 0) > 0 %}style="color:var(--sk-fail);"{% endif %}>
-          {{ (rb.SF if rb.SF is defined else 0) | format_num }}
-        </span>
-      </div>
-      <div class="kv-row" style="border-top:2px solid var(--sk-border);margin-top:2px;padding-top:4px;">
-        <span class="kv-key" style="font-weight:600;">Total</span>
-        <span class="kv-val" style="font-weight:600;">{{ (rb.total if rb.total is defined else 0) | format_num }}</span>
+        <span class="kv-key">Float — Median</span>
+        <span class="kv-val">{{ float_histogram.median_float_days | round(1) }}d</span>
       </div>
     </div>
 
-    {% endif %}
-    
-    <!-- Top Issues callout -->
-
+    <!-- Action required -->
     {% set failing = checks | selectattr('status', 'equalto', 'fail') | list %}
     {% if failing %}
     <div class="callout callout-warn">
-      <strong style="font-size:7.5pt;text-transform:uppercase;letter-spacing:0.05em;">
+      <strong style="font-size:7pt;text-transform:uppercase;letter-spacing:0.05em;">
         Action Required
       </strong>
       <ul class="rec-list" style="margin-top:4px;">
-        {% for c in failing[:4] %}
-          <li>{{ c.check_name }}: {{ c.recommendation | truncate(80) }}</li>
+        {% for c in failing[:5] %}
+          <li>{{ c.check_name }}: {{ c.recommendation | truncate(75) }}</li>
         {% endfor %}
       </ul>
     </div>
+    {% else %}
+    <div class="callout callout-pass">
+      <strong style="font-size:7pt;">All checks passed.</strong>
+      This schedule meets DCMA quality standards.
+    </div>
     {% endif %}
 
-  </div><!-- /two-col-side -->
+  </div>
 
 </div><!-- /two-col -->
 
+<!-- Page 1 footer -->
+<div class="doc-footer">
+  <span>SKOPIA Lens &nbsp;·&nbsp; Schedule Health Report &nbsp;·&nbsp; Confidential</span>
+  <span>Generated {{ generated_at }}</span>
+</div>
 
-<!-- ══════════════════════════════════════════════════════════════════════════
-     LONGEST PATH (Critical Path) — page 2
-═══════════════════════════════════════════════════════════════════════════ -->
-{% if longest_path %}
 
-<div class="section" style="page-break-before: always;">
+<!-- ════════════════════════════════════════════════════════════════════════════
+     ② SCHEDULE — FULL ACTIVITY TABLE
+     One row per activity, grouped by WBS band.
+     Columns: ID · Name · Rem Dur · Start · Finish · Total Float · Status
+════════════════════════════════════════════════════════════════════════════ -->
+{% if schedule_data and schedule_data.activities %}
+
+<div class="page-section">
   <div class="section-title">
-    <span class="section-accent"></span>Critical Path — Longest Path Trace
+    <span class="section-pip"></span>② Schedule — Activity Listing
   </div>
 
   <div class="callout callout-info" style="margin-bottom:10px;">
-    <strong>{{ longest_path | length }} activities</strong> on the longest driving path.
-    Total duration: <strong>{{ longest_path | sum(attribute='duration_days') }}
-    working days</strong> from project start to finish.
+    <strong>{{ schedule_data.activities | length }} activities</strong> listed below,
+    sorted by WBS group. Critical activities are highlighted.
+    Dates reflect the current schedule (with CPM recalculation if applied).
+  </div>
+
+  {% set activities = schedule_data.activities %}
+
+  {# Build WBS lookup: id → name #}
+  {% set wbs_map = {} %}
+  {% if schedule_data.wbs_nodes %}
+    {% for w in schedule_data.wbs_nodes %}
+      {% if wbs_map.update({w.id: w.name}) %}{% endif %}
+    {% endfor %}
+  {% endif %}
+
+  {# Group activities by their wbs id for banded display #}
+  {# WeasyPrint Jinja: build ordered list of (wbs_id, wbs_name, [activities]) #}
+  {# We iterate once to collect wbs order, then render band + rows #}
+  {% set ns = namespace(current_wbs='__NONE__') %}
+
+  <table class="schedule-table">
+    <thead>
+      <tr>
+        <th style="width:14%">Activity ID</th>
+        <th style="width:32%">Activity Name</th>
+        <th style="width:7%" class="right">Rem Dur</th>
+        <th style="width:11%" class="center">Start</th>
+        <th style="width:11%" class="center">Finish</th>
+        <th style="width:8%" class="right">Total Float</th>
+        <th style="width:17%">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for act in activities %}
+
+        {# Emit WBS band header when WBS changes #}
+        {% if act.wbs != ns.current_wbs %}
+          {% set ns.current_wbs = act.wbs %}
+          {% set band_name = wbs_map.get(act.wbs, act.wbs_name or act.wbs or '') %}
+          <tr class="wbs-row">
+            <td colspan="7">
+              <span class="wbs-indent">▸ {{ band_name }}</span>
+            </td>
+          </tr>
+        {% endif %}
+
+        {# Determine row class #}
+        {% set is_critical = act.critical or (act.total_float is not none and act.total_float <= 0) %}
+        {% set is_complete = act.status == 'Complete' or act.pct == 100 %}
+        {% set is_mile = act.type == 'milestone' or act.rem_dur == 0 %}
+
+        <tr class="{% if is_critical and not is_complete %}crit-row{% elif is_complete %}done-row{% endif %}">
+
+          <!-- Activity ID -->
+          <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+                     color:{% if is_critical and not is_complete %}var(--sk-fail){% else %}var(--sk-peri){% endif %};">
+            {{ act.id }}
+          </td>
+
+          <!-- Activity Name -->
+          <td style="font-size:7pt;">
+            {% if is_mile %}
+              <span class="milestone-sym">◆</span>
+            {% endif %}
+            {{ act.name | truncate(52) }}
+          </td>
+
+          <!-- Remaining Duration -->
+          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;color:var(--sk-muted);">
+            {% if act.rem_dur is not none %}
+              {{ act.rem_dur }}d
+            {% else %}—{% endif %}
+          </td>
+
+          <!-- Start -->
+          <td style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+            {{ act.start | format_date }}
+          </td>
+
+          <!-- Finish -->
+          <td style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+            {{ act.finish | format_date }}
+          </td>
+
+          <!-- Total Float -->
+          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+                     color:{% if act.total_float is not none and act.total_float < 0 %}var(--sk-fail)
+                           {% elif act.total_float is not none and act.total_float == 0 %}var(--sk-warn)
+                           {% else %}var(--sk-muted){% endif %};">
+            {% if act.total_float is not none %}{{ act.total_float }}d{% else %}—{% endif %}
+          </td>
+
+          <!-- Status -->
+          <td>
+            {% if is_complete %}
+              <span class="status-dot-sm" style="background:var(--sk-pass);"></span>
+              <span style="color:var(--sk-pass);font-size:7pt;">Complete</span>
+            {% elif act.status == 'In Progress' or act.pct > 0 %}
+              <span class="status-dot-sm" style="background:var(--sk-warn);"></span>
+              <span style="color:var(--sk-warn);font-size:7pt;">In Progress</span>
+              {% if act.pct %}<span style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6pt;"> {{ act.pct }}%</span>{% endif %}
+            {% elif is_critical %}
+              <span class="status-dot-sm" style="background:var(--sk-fail);"></span>
+              <span style="color:var(--sk-fail);font-size:7pt;font-weight:600;">Critical</span>
+            {% else %}
+              <span class="status-dot-sm" style="background:#CBD5E1;"></span>
+              <span style="color:var(--sk-muted);font-size:7pt;">Not Started</span>
+            {% endif %}
+          </td>
+
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endif %}<!-- /schedule table -->
+
+
+<!-- ════════════════════════════════════════════════════════════════════════════
+     ③ CRITICAL PATH TRACE — LONGEST PATH
+════════════════════════════════════════════════════════════════════════════ -->
+{% if longest_path %}
+
+<div class="page-section">
+  <div class="section-title">
+    <span class="section-pip"></span>③ Critical Path — Longest Path Trace
+  </div>
+
+  <div class="callout callout-info" style="margin-bottom:10px;">
+    <strong>{{ longest_path | length }} activities</strong> on the longest driving path from
+    project start to finish.
+    Total duration: <strong>{{ longest_path | sum(attribute='duration_days') }} working days</strong>.
+    Activities with zero float are highlighted.
   </div>
 
   <table class="path-table">
@@ -833,40 +1091,35 @@
       <tr>
         <th style="width:4%">#</th>
         <th style="width:14%">Activity ID</th>
-        <th style="width:38%">Activity Name</th>
+        <th style="width:40%">Activity Name</th>
         <th style="width:13%">Start</th>
         <th style="width:13%">Finish</th>
-        <th style="width:10%">Duration</th>
+        <th style="width:8%">Duration</th>
         <th style="width:8%">Float</th>
       </tr>
     </thead>
     <tbody>
       {% for act in longest_path %}
       <tr {% if act.float_days == 0 and not act.is_milestone %}class="critical-row"{% endif %}>
-        <td style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+        <td style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6pt;">
           {{ loop.index }}
         </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;">{{ act.id }}</td>
-        <td>
-          {% if act.is_milestone %}
-            <span class="milestone-marker">◆ </span>
-          {% endif %}
+        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;">{{ act.id }}</td>
+        <td style="font-size:7pt;">
+          {% if act.is_milestone %}<span class="milestone-marker">◆ </span>{% endif %}
           {{ act.name }}
         </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;">
+        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
           {{ act.start | format_date }}
         </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;">
+        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
           {{ act.finish | format_date }}
         </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;text-align:right;">
-          {% if act.is_milestone %}
-            <span style="color:var(--sk-muted);">—</span>
-          {% else %}
-            {{ act.duration_days }}d
-          {% endif %}
+        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;text-align:right;">
+          {% if act.is_milestone %}<span style="color:var(--sk-muted);">—</span>
+          {% else %}{{ act.duration_days }}d{% endif %}
         </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:7pt;text-align:right;">
+        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;text-align:right;">
           {% if act.float_days == 0 %}
             <span style="color:var(--sk-fail);font-weight:600;">0d</span>
           {% else %}
@@ -877,19 +1130,228 @@
       {% endfor %}
     </tbody>
   </table>
-
 </div>
 
-{% endif %}<!-- /longest_path -->
+{% endif %}<!-- /critical path -->
 
 
-<!-- ══════════════════════════════════════════════════════════════════════════
-     DOCUMENT FOOTER (page 1 only — running footer handles subsequent pages)
-═══════════════════════════════════════════════════════════════════════════ -->
-<div class="doc-footer">
-  <span>SKOPIA Lens &nbsp;·&nbsp; Schedule Health Report &nbsp;·&nbsp; Confidential</span>
-  <span>Generated {{ generated_at }}</span>
-</div>
+<!-- ════════════════════════════════════════════════════════════════════════════
+     ④ ANALYTICS
+     Left column:  Float distribution histogram + Relationship type breakdown
+     Right column: Bottleneck top-10 table
+════════════════════════════════════════════════════════════════════════════ -->
+<div class="page-section">
+  <div class="section-title">
+    <span class="section-pip"></span>④ Analytics
+  </div>
+
+  <div class="analytics-grid">
+
+    <!-- ── LEFT COLUMN ───────────────────────────────────────────────────── -->
+    <div class="analytics-col">
+
+      <!-- Float Distribution Histogram -->
+      {% if float_histogram and float_histogram.bins %}
+      <div class="analytics-card">
+        <div class="analytics-card-title">
+          Float Distribution
+          <span style="font-family:'JetBrains Mono',monospace;font-size:7pt;color:var(--sk-muted);font-weight:400;margin-left:8px;">
+            mean {{ float_histogram.mean_float_days | round(1) }}d &nbsp;·&nbsp;
+            median {{ float_histogram.median_float_days | round(1) }}d
+          </span>
+        </div>
+
+        {# Find max bin count for scaling bar widths #}
+        {% set max_count = namespace(val=1) %}
+        {% for bin in float_histogram.bins %}
+          {% if bin.count > max_count.val %}{% set max_count.val = bin.count %}{% endif %}
+        {% endfor %}
+
+        <div class="histogram-wrap">
+          {% for bin in float_histogram.bins %}
+            {# Colour mapping: severity field from API #}
+            {% set bar_col =
+               '#DC2626' if bin.severity == 'fail' else
+               '#D97706' if bin.severity == 'warn' else
+               '#16A34A' %}
+            {% set pct = ((bin.count / max_count.val) * 100) | int %}
+            <div class="hist-row">
+              <div class="hist-label">{{ bin.label }}</div>
+              <div class="hist-bar-bg">
+                <div class="hist-bar-fill"
+                     style="width:{{ pct }}%;background:{{ bar_col }};"></div>
+              </div>
+              <div class="hist-count">{{ bin.count | format_num }}</div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Relationship Type Breakdown -->
+      {% if relationship_breakdown %}
+      <div class="analytics-card">
+        <div class="analytics-card-title">Relationship Type Breakdown</div>
+
+        {% set rb = relationship_breakdown %}
+        {% set total = rb.total if rb.total else 1 %}
+
+        {% for rel_type, rel_count, rel_col in [
+            ('FS — Finish to Start', rb.FS, '#4A6FE8'),
+            ('SS — Start to Start',  rb.SS, '#1EC8D4'),
+            ('FF — Finish to Finish',rb.FF, '#D97706'),
+            ('SF — Start to Finish', rb.SF, '#DC2626')
+          ] %}
+          {% set pct = ((rel_count / total) * 100) | round(1) %}
+          <div class="rel-row">
+            <div class="rel-label">{{ rel_type[:2] }}</div>
+            <div class="rel-bar-bg">
+              <div class="rel-bar-fill"
+                   style="width:{{ pct }}%;background:{{ rel_col }};"></div>
+            </div>
+            <div class="rel-count">{{ rel_count | format_num }}</div>
+            <div class="rel-pct">{{ pct }}%</div>
+          </div>
+        {% endfor %}
+
+        <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--sk-border);
+                    display:flex;justify-content:space-between;
+                    font-family:'JetBrains Mono',monospace;font-size:7pt;color:var(--sk-muted);">
+          <span>Total relationships</span>
+          <span style="color:var(--sk-text);font-weight:600;">{{ rb.total | format_num }}</span>
+        </div>
+
+        {# SF warning — SF relationships almost always indicate an error #}
+        {% if rb.SF > 0 %}
+        <div class="callout callout-warn" style="margin-top:8px;font-size:6.5pt;">
+          <strong>{{ rb.SF }} SF relationship{{ 's' if rb.SF > 1 else '' }} detected.</strong>
+          Start-to-Finish relationships almost always indicate a scheduling error.
+          Review and correct before submission.
+        </div>
+        {% endif %}
+      </div>
+      {% endif %}
+
+    </div><!-- /left col -->
+
+    <!-- ── RIGHT COLUMN: Bottleneck Top-10 ──────────────────────────────── -->
+    <div class="analytics-col">
+
+      {% if network_metrics and network_metrics.top_bottlenecks %}
+      <div class="analytics-card">
+        <div class="analytics-card-title">
+          Top Schedule Bottlenecks
+          <span style="font-family:'Open Sans',Arial,sans-serif;font-size:7pt;
+                       color:var(--sk-muted);font-weight:400;margin-left:6px;">
+            (fan-in × fan-out score)
+          </span>
+        </div>
+
+        <div class="callout callout-info" style="margin-bottom:8px;font-size:6.5pt;">
+          Activities with high fan-in AND fan-out scores are structural bottlenecks —
+          any delay here cascades through a large portion of the network.
+          Zero-float bottlenecks are the highest risk.
+        </div>
+
+        <table class="bottleneck-table">
+          <thead>
+            <tr>
+              <th style="width:5%">#</th>
+              <th style="width:35%">Activity</th>
+              <th style="width:12%" class="right">In</th>
+              <th style="width:12%" class="right">Out</th>
+              <th style="width:12%" class="right">Score</th>
+              <th style="width:12%" class="right">Float</th>
+              <th style="width:12%" class="right">Critical</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for bot in network_metrics.top_bottlenecks[:10] %}
+            <tr>
+              <td style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6pt;">
+                {{ loop.index }}
+              </td>
+              <td style="font-size:6.5pt;">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:6pt;color:var(--sk-peri);">
+                  {{ bot.id }}
+                </div>
+                <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;">
+                  {{ bot.name | truncate(38) }}
+                </div>
+              </td>
+              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+                {{ bot.fan_in }}
+              </td>
+              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+                {{ bot.fan_out }}
+              </td>
+              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+                         font-weight:600;color:var(--sk-peri);">
+                {{ bot.score }}
+              </td>
+              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+                         color:{% if bot.float_days is defined and bot.float_days <= 0 %}var(--sk-fail)
+                               {% else %}var(--sk-muted){% endif %};">
+                {% if bot.float_days is defined %}{{ bot.float_days }}d{% else %}—{% endif %}
+              </td>
+              <td style="text-align:right;font-size:6.5pt;">
+                {% if bot.is_critical %}
+                  <span style="color:var(--sk-fail);font-weight:700;">●</span>
+                {% else %}
+                  <span style="color:var(--sk-border);">○</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <!-- Network Density summary -->
+      {% if network_metrics %}
+      <div class="analytics-card">
+        <div class="analytics-card-title">Network Metrics</div>
+        <div class="kv-row">
+          <span class="kv-key">Logic density (rels/task)</span>
+          <span class="kv-val"
+            style="color:{% if network_metrics.ratio < 0.5 or network_metrics.ratio > 4.0 %}var(--sk-warn){% else %}var(--sk-pass){% endif %};">
+            {{ network_metrics.ratio | round(2) }}
+          </span>
+        </div>
+        <div class="kv-row">
+          <span class="kv-key">Open starts (no predecessor)</span>
+          <span class="kv-val"
+            style="color:{% if network_metrics.open_starts > 0 %}var(--sk-warn){% else %}var(--sk-pass){% endif %};">
+            {{ network_metrics.open_starts }}
+          </span>
+        </div>
+        <div class="kv-row">
+          <span class="kv-key">Open ends (no successor)</span>
+          <span class="kv-val"
+            style="color:{% if network_metrics.open_ends > 1 %}var(--sk-warn){% else %}var(--sk-pass){% endif %};">
+            {{ network_metrics.open_ends }}
+          </span>
+        </div>
+        {% if network_metrics.top_bottlenecks %}
+        <div class="kv-row">
+          <span class="kv-key">Bottleneck activities identified</span>
+          <span class="kv-val">{{ network_metrics.top_bottlenecks | length }}</span>
+        </div>
+        {% endif %}
+        <div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--sk-border);
+                    font-size:6.5pt;color:var(--sk-muted);">
+          Healthy logic density: 0.5–4.0 relationships per incomplete task.
+          Open starts/ends (beyond project boundaries) indicate incomplete network logic.
+        </div>
+      </div>
+      {% endif %}
+
+    </div><!-- /right col -->
+
+  </div><!-- /analytics-grid -->
+
+</div><!-- /analytics section -->
 
 </body>
 </html>
