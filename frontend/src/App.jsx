@@ -1,17 +1,14 @@
 // ── App.jsx ───────────────────────────────────────────────────────────────────
 //
-// v0.9.3 changes:
-//   - Report Wizard modal (was "Export Health Report"):
-//     • Renamed to "Report Wizard"
-//     • Section order: Cover/Grade/Stats → Schedule → Critical Path → Analytics
-//     • DCMA Checks section removed from wizard (always included in payload;
-//       the backend template renders it as part of the cover section)
-//     • New "Page Settings" section: page size (A4/A3/Letter/Legal) +
-//       orientation (Portrait/Landscape) — sent as _page_settings in payload
-//       for the Jinja2 template @page rule
-//     • Schedule section note: "Reflects current activity listing"
-//   - PdfExportButton unchanged (still in header, opens wizard on click)
-//   - All App shell logic unchanged
+// v1.3 changes (lazy schedule_data):
+//   - Calls loadScheduleData() from AnalysisContext when user navigates to
+//     the Schedule view (view === 'schedule'). Idempotent — safe to call
+//     on every navigation, context no-ops if already loaded.
+//   - ReportWizard now reads scheduleData from context separately and merges
+//     it into the PDF payload only when generating. The wizard's
+//     hasScheduleData check now reads from context.scheduleData rather than
+//     analysis.schedule_data (which no longer exists in v1.3).
+//   - All other App shell logic unchanged from v0.9.3.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -40,49 +37,32 @@ const W = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Report Wizard
 //
-// Three panels inside the modal:
-//   A. Report Details  — company name
-//   B. Content         — section toggles (ordered per spec)
-//   C. Page Settings   — size + orientation
-//
-// Section order in PDF:
-//   1. Cover / Grade / Stats   (always included, can be toggled off)
-//   2. Schedule Table          (only shown if schedule_data.activities exists)
-//   3. Critical Path Trace
-//   4. Analytics
-//
-// DCMA Checks table is always sent in the payload — the template renders it
-// on the same page as the cover stats. It is not exposed as a separate toggle
-// because users found it confusing to separate grade from the check evidence.
-//
-// Page settings are passed as payload._page_settings:
-//   { size: 'A4'|'A3'|'Letter'|'Legal', orientation: 'landscape'|'portrait' }
-// The backend pdf_export.py must inject these into the @page CSS rule.
-//
+// v1.3: scheduleData is no longer in analysis — it's separate context state.
+// The wizard receives it as a prop and merges it into the payload on generate.
+// hasScheduleData is derived from the scheduleData prop (not analysis).
 // ─────────────────────────────────────────────────────────────────────────────
-function ReportWizard({ analysis, onClose }) {
-  const hasScheduleData = !!(analysis?.schedule_data?.activities?.length)
+function ReportWizard({ analysis, scheduleData, onClose }) {
+  // scheduleData may be null if the user hasn't opened Schedule view yet
+  // (session still valid but Gantt not fetched). The wizard shows the Schedule
+  // section as unavailable in that case, matching the previous behaviour when
+  // schedule_data was absent from the analysis object.
+  const hasScheduleData = !!(scheduleData?.activities?.length)
 
-  // ── State ──────────────────────────────────────────────────────────────────
   const [companyName,  setCompanyName]  = useState('')
   const [loading,      setLoading]      = useState(false)
   const [error,        setError]        = useState(null)
   const [success,      setSuccess]      = useState(false)
 
-  // Content section toggles — ordered as per spec
-  // DCMA Checks is always included, not a user toggle
   const [sections, setSections] = useState({
-    summary:       true,                // 1. Cover / Grade / Stats
-    schedule_data: hasScheduleData,     // 2. Schedule Table (only if data exists)
-    longest_path:  true,                // 3. Critical Path Trace
-    analytics:     true,                // 4. Analytics
+    summary:       true,
+    schedule_data: hasScheduleData,
+    longest_path:  true,
+    analytics:     true,
   })
 
-  // Page settings
   const [pageSize,        setPageSize]        = useState('A4')
   const [pageOrientation, setPageOrientation] = useState('landscape')
 
-  // ── Section definitions — rendered in order ────────────────────────────────
   const SECTIONS = [
     {
       key:   'summary',
@@ -90,7 +70,6 @@ function ReportWizard({ analysis, onClose }) {
       desc:  'Project overview, overall health grade, summary statistics, and DCMA check results table',
       icon:  '①',
     },
-    // Only show Schedule section when activity data is present
     ...(hasScheduleData ? [{
       key:   'schedule_data',
       label: 'Schedule (Table & Gantt)',
@@ -111,7 +90,6 @@ function ReportWizard({ analysis, onClose }) {
     },
   ]
 
-  // ── Page size options ──────────────────────────────────────────────────────
   const PAGE_SIZES = [
     { value: 'A4',     label: 'A4',     dim: '210 × 297mm' },
     { value: 'A3',     label: 'A3',     dim: '297 × 420mm' },
@@ -119,12 +97,11 @@ function ReportWizard({ analysis, onClose }) {
     { value: 'Legal',  label: 'Legal',  dim: '8.5 × 14in'  },
   ]
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
   function toggleSection(key) {
     setSections(prev => {
       const next  = { ...prev, [key]: !prev[key] }
       const anyOn = Object.values(next).some(Boolean)
-      if (!anyOn) return prev   // always keep at least one section
+      if (!anyOn) return prev
       return next
     })
   }
@@ -133,8 +110,14 @@ function ReportWizard({ analysis, onClose }) {
     setError(null)
     setLoading(true)
 
-    // Build filtered payload — strip data for unchecked sections
-    const payload = { ...analysis }
+    // Merge scheduleData into the payload — backend PDF template expects
+    // analysis.schedule_data if the Schedule section is included.
+    const payload = {
+      ...analysis,
+      // Attach scheduleData under the key the PDF template expects.
+      // If the section is toggled off, this stays null (filtered below).
+      schedule_data: scheduleData ?? null,
+    }
 
     if (!sections.schedule_data) payload.schedule_data    = null
     if (!sections.longest_path)  payload.longest_path     = []
@@ -143,15 +126,12 @@ function ReportWizard({ analysis, onClose }) {
       payload.relationship_breakdown = null
       payload.network_metrics        = { ...(payload.network_metrics ?? {}), top_bottlenecks: [] }
     }
-    // Note: checks are always included — they're part of the cover/stats page
 
-    // Metadata for the Jinja2 template
-    payload._sections     = sections
-    payload._company_name = companyName.trim() || null
+    payload._sections      = sections
+    payload._company_name  = companyName.trim() || null
     payload._page_settings = {
       size:        pageSize,
       orientation: pageOrientation,
-      // CSS @page value e.g. "A4 landscape" or "Letter portrait"
       css_size:    `${pageSize} ${pageOrientation}`,
     }
 
@@ -170,7 +150,6 @@ function ReportWizard({ analysis, onClose }) {
     if (e.target === e.currentTarget && !loading) onClose()
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div
       onClick={handleBackdrop}
@@ -194,213 +173,186 @@ function ReportWizard({ analysis, onClose }) {
         {/* Gradient accent strip */}
         <div style={{ height: 3, background: W.grad, borderRadius: '14px 14px 0 0' }} />
 
-        {/* ── Modal header ─────────────────────────────────────────────────── */}
+        {/* ── Modal header ──────────────────────────────────────────────────── */}
         <div style={{
           padding: '16px 20px 14px',
           borderBottom: `1px solid ${W.border}`,
-          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div>
             <div style={{ fontFamily: 'var(--font-head)', fontWeight: 900, fontSize: 15, color: W.text }}>
               Report Wizard
             </div>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: W.muted, marginTop: 2 }}>
-              {analysis?.project_name ?? 'Schedule'} · Configure your PDF report
+            <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: W.muted, marginTop: 2 }}>
+              Configure and export your SKOPIA health report
             </div>
           </div>
-          {!loading && (
-            <button
-              onClick={onClose}
-              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: W.muted, fontSize: 20, lineHeight: 1, padding: '0 2px', marginTop: -2 }}
-              title="Close"
-            >×</button>
-          )}
+          <button
+            onClick={() => !loading && onClose()}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: W.muted, fontSize: 18, lineHeight: 1, padding: 4,
+            }}
+          >
+            ✕
+          </button>
         </div>
 
-        {/* ── Modal body ───────────────────────────────────────────────────── */}
+        {/* ── Modal body ────────────────────────────────────────────────────── */}
         <div style={{ padding: '18px 20px 20px' }}>
 
-          {/* ── Success ────────────────────────────────────────────────────── */}
           {success ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '28px 0' }}>
-              <div style={{ fontSize: 40 }}>✅</div>
-              <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 14, color: W.pass }}>
-                PDF Downloaded
+            // ── Success state ───────────────────────────────────────────────
+            <div style={{ textAlign: 'center', padding: '32px 0' }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+              <div style={{
+                fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 15,
+                color: W.pass, marginBottom: 6,
+              }}>
+                PDF downloaded
               </div>
-              <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: W.muted, textAlign: 'center', lineHeight: 1.5 }}>
-                Your report has been saved to your downloads folder.
+              <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: W.muted }}>
+                Check your Downloads folder
               </div>
             </div>
           ) : (
             <>
-              {/* ══ A. Report Details ═══════════════════════════════════════ */}
+              {/* ── A. Report Details ──────────────────────────────────────── */}
               <SectionHeader label="Report Details" />
-
-              <div style={{ marginBottom: 20 }}>
-                <FieldLabel label="Company Name" optional />
+              <div style={{ marginBottom: 18 }}>
+                <FieldLabel label="Company name" optional />
                 <input
                   type="text"
                   value={companyName}
                   onChange={e => setCompanyName(e.target.value)}
-                  placeholder="e.g. Roberts Civil Pty Ltd"
-                  maxLength={60}
+                  placeholder="Your company name (appears on cover)"
+                  disabled={loading}
                   style={{
-                    width: '100%', fontFamily: 'var(--font-body)', fontSize: 12,
-                    padding: '8px 10px', border: `1px solid ${W.border}`, borderRadius: 6,
-                    color: W.text, background: W.bg, outline: 'none', boxSizing: 'border-box',
+                    width: '100%', boxSizing: 'border-box',
+                    border: `1px solid ${W.border}`, borderRadius: 6,
+                    padding: '8px 11px', fontSize: 13,
+                    fontFamily: 'var(--font-body)', color: W.text,
+                    background: loading ? W.bg : W.card, outline: 'none',
                   }}
                 />
-                <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: W.muted, marginTop: 4 }}>
-                  Shown in the report header alongside the SKOPIA branding.
-                </div>
               </div>
 
-              {/* ══ B. Content ══════════════════════════════════════════════ */}
+              {/* ── B. Content ────────────────────────────────────────────── */}
               <SectionHeader label="Content" />
-              <div style={{ marginBottom: 20 }}>
-                <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: W.muted, marginBottom: 8 }}>
-                  Select which sections to include. Sections appear in this order in the PDF.
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {SECTIONS.map(({ key, label, desc, icon }) => {
-                    const checked       = sections[key]
-                    const isLast        = checked && Object.values(sections).filter(Boolean).length === 1
-                    return (
-                      <div
-                        key={key}
-                        onClick={() => !isLast && toggleSection(key)}
-                        style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 10,
-                          padding: '9px 11px', borderRadius: 8,
-                          border: `1px solid ${checked ? W.peri : W.border}`,
-                          background: checked ? 'rgba(74,111,232,0.05)' : W.card,
-                          cursor: isLast ? 'not-allowed' : 'pointer',
-                          opacity: isLast ? 0.55 : 1,
-                          transition: 'border-color 0.12s, background 0.12s',
-                          userSelect: 'none',
-                        }}
-                      >
-                        {/* Order number badge */}
-                        <div style={{
-                          width: 20, height: 20, borderRadius: 4, flexShrink: 0, marginTop: 1,
-                          background: checked ? W.peri : W.border,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10,
-                          color: checked ? '#fff' : W.muted,
-                          transition: 'background 0.12s, color 0.12s',
-                        }}>
-                          {icon}
-                        </div>
-                        {/* Checkbox */}
-                        <div style={{
-                          width: 16, height: 16, borderRadius: 4, flexShrink: 0, marginTop: 2,
-                          border: `1.5px solid ${checked ? W.peri : '#9CA3AF'}`,
-                          background: checked ? W.peri : 'transparent',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          transition: 'background 0.12s, border-color 0.12s',
-                        }}>
-                          {checked && <span style={{ color: '#fff', fontSize: 10, fontWeight: 700, lineHeight: 1 }}>✓</span>}
-                        </div>
-                        {/* Text */}
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 12, color: W.text }}>
-                            {label}
-                          </div>
-                          <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: W.muted, marginTop: 2, lineHeight: 1.45 }}>
-                            {desc}
-                          </div>
-                        </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+                {SECTIONS.map(sec => (
+                  <label
+                    key={sec.key}
+                    style={{
+                      display: 'flex', gap: 12, alignItems: 'flex-start',
+                      background: sections[sec.key] ? '#F0F7FF' : W.bg,
+                      border: `1px solid ${sections[sec.key] ? '#BFDBFE' : W.border}`,
+                      borderRadius: 8, padding: '10px 12px', cursor: 'pointer',
+                      transition: 'all 0.12s',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!sections[sec.key]}
+                      onChange={() => toggleSection(sec.key)}
+                      disabled={loading}
+                      style={{ marginTop: 2, accentColor: W.peri, flexShrink: 0 }}
+                    />
+                    <div>
+                      <div style={{
+                        fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 12,
+                        color: W.text, marginBottom: 2,
+                      }}>
+                        {sec.icon} {sec.label}
                       </div>
-                    )
-                  })}
-                </div>
+                      <div style={{ fontFamily: 'var(--font-body)', fontSize: 11.5, color: W.muted, lineHeight: 1.5 }}>
+                        {sec.desc}
+                      </div>
+                    </div>
+                  </label>
+                ))}
               </div>
 
-              {/* ══ C. Page Settings ════════════════════════════════════════ */}
+              {/* ── C. Page Settings ──────────────────────────────────────── */}
               <SectionHeader label="Page Settings" />
-              <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 20 }}>
 
                 {/* Page size */}
-                <FieldLabel label="Page Size" />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 6, marginBottom: 14 }}>
-                  {PAGE_SIZES.map(({ value, label, dim }) => {
-                    const sel = pageSize === value
-                    return (
-                      <div
-                        key={value}
-                        onClick={() => setPageSize(value)}
+                <div>
+                  <FieldLabel label="Page size" />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {PAGE_SIZES.map(ps => (
+                      <button
+                        key={ps.value}
+                        onClick={() => setPageSize(ps.value)}
+                        disabled={loading}
                         style={{
-                          padding: '8px 6px', borderRadius: 7, textAlign: 'center',
-                          border: `1px solid ${sel ? W.peri : W.border}`,
-                          background: sel ? 'rgba(74,111,232,0.07)' : W.card,
-                          cursor: 'pointer', userSelect: 'none',
-                          transition: 'border-color 0.12s, background 0.12s',
+                          fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 11,
+                          padding: '5px 10px', borderRadius: 5, cursor: 'pointer',
+                          border: `1.5px solid ${pageSize === ps.value ? W.peri : W.border}`,
+                          background: pageSize === ps.value ? '#EEF2FF' : W.card,
+                          color: pageSize === ps.value ? W.peri : W.muted,
                         }}
                       >
-                        <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 12, color: sel ? W.peri : W.text }}>{label}</div>
-                        <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: W.muted, marginTop: 2 }}>{dim}</div>
-                      </div>
-                    )
-                  })}
+                        {ps.label}
+                        <span style={{ fontWeight: 400, fontSize: 9, display: 'block', opacity: 0.8 }}>
+                          {ps.dim}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 {/* Orientation */}
-                <FieldLabel label="Orientation" />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                  {[
-                    { value: 'landscape', label: 'Landscape', icon: '⬜', note: 'Recommended for schedule tables' },
-                    { value: 'portrait',  label: 'Portrait',  icon: '⬜', note: 'Recommended for short reports' },
-                  ].map(({ value, label, note }) => {
-                    const sel = pageOrientation === value
-                    return (
-                      <div
-                        key={value}
-                        onClick={() => setPageOrientation(value)}
+                <div>
+                  <FieldLabel label="Orientation" />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {['landscape', 'portrait'].map(orient => (
+                      <label
+                        key={orient}
                         style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 9,
-                          padding: '9px 11px', borderRadius: 7,
-                          border: `1px solid ${sel ? W.peri : W.border}`,
-                          background: sel ? 'rgba(74,111,232,0.05)' : W.card,
-                          cursor: 'pointer', userSelect: 'none',
-                          transition: 'border-color 0.12s, background 0.12s',
+                          display: 'flex', alignItems: 'center', gap: 8,
+                          cursor: 'pointer', fontFamily: 'var(--font-body)', fontSize: 12,
+                          color: pageOrientation === orient ? W.text : W.muted,
                         }}
                       >
-                        {/* Orientation diagram */}
-                        <div style={{
-                          flexShrink: 0, marginTop: 1,
-                          width:  value === 'landscape' ? 22 : 16,
-                          height: value === 'landscape' ? 16 : 22,
-                          border: `2px solid ${sel ? W.peri : '#9CA3AF'}`,
-                          borderRadius: 2,
-                          transition: 'border-color 0.12s',
-                        }} />
-                        <div>
-                          <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 12, color: sel ? W.peri : W.text }}>{label}</div>
-                          <div style={{ fontFamily: 'var(--font-body)', fontSize: 10, color: W.muted, marginTop: 2 }}>{note}</div>
-                        </div>
-                      </div>
-                    )
-                  })}
+                        <input
+                          type="radio"
+                          name="orientation"
+                          value={orient}
+                          checked={pageOrientation === orient}
+                          onChange={() => setPageOrientation(orient)}
+                          disabled={loading}
+                          style={{ accentColor: W.peri }}
+                        />
+                        {orient.charAt(0).toUpperCase() + orient.slice(1)}
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              {/* ── Error ────────────────────────────────────────────────── */}
+              {/* ── Error ─────────────────────────────────────────────────── */}
               {error && (
-                <div style={{ marginBottom: 14, padding: '9px 12px', background: '#FEF2F2', border: `1px solid ${W.fail}`, borderRadius: 6, fontFamily: 'var(--font-body)', fontSize: 11, color: W.fail }}>
-                  ⚠ {error}
+                <div style={{
+                  background: '#FEF2F2', border: `1px solid #FECACA`,
+                  borderRadius: 7, padding: '10px 13px', marginBottom: 16,
+                  fontFamily: 'var(--font-body)', fontSize: 12.5, color: W.fail,
+                }}>
+                  {error}
                 </div>
               )}
 
-              {/* ── Actions ──────────────────────────────────────────────── */}
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              {/* ── Generate button ───────────────────────────────────────── */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
                 <button
-                  onClick={onClose}
+                  onClick={() => !loading && onClose()}
                   disabled={loading}
                   style={{
                     fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 12,
-                    padding: '9px 18px', borderRadius: 7,
-                    border: `1px solid ${W.border}`, background: W.bg,
-                    color: W.muted, cursor: loading ? 'not-allowed' : 'pointer',
+                    padding: '9px 18px', borderRadius: 7, cursor: 'pointer',
+                    border: `1px solid ${W.border}`,
+                    background: W.card, color: W.muted,
                   }}
                 >
                   Cancel
@@ -452,12 +404,9 @@ function ReportWizard({ analysis, onClose }) {
 
 // ── Small shared sub-components ───────────────────────────────────────────────
 
-// Section divider header inside the wizard body
 function SectionHeader({ label }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12,
-    }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
       <div style={{ height: 1, background: W.border, flex: 1 }} />
       <div style={{
         fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10,
@@ -471,7 +420,6 @@ function SectionHeader({ label }) {
   )
 }
 
-// Field label with optional "optional" tag
 function FieldLabel({ label, optional }) {
   return (
     <div style={{
@@ -489,8 +437,6 @@ function FieldLabel({ label, optional }) {
   )
 }
 
-// ── Header Export PDF button ───────────────────────────────────────────────────
-// Opens the wizard on click — does NOT fire the export directly.
 function PdfExportButton({ onOpenWizard }) {
   return (
     <button
@@ -520,7 +466,6 @@ function PdfExportButton({ onOpenWizard }) {
   )
 }
 
-// ── EmptyState ────────────────────────────────────────────────────────────────
 function EmptyState({ label, onUpload }) {
   return (
     <div style={{ flex: 1, background: '#F7F8FC', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
@@ -535,10 +480,22 @@ function EmptyState({ label, onUpload }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [view,           setView]          = useState('upload')
-  const [showWizard,     setShowWizard]    = useState(false)
-  const { analysis } = useAnalysis()
+  const [view,       setView]       = useState('upload')
+  const [showWizard, setShowWizard] = useState(false)
+
+  // v1.3: pull scheduleData + loadScheduleData from context
+  const { analysis, scheduleData, loadScheduleData } = useAnalysis()
   const hasData = !!analysis
+
+  // ── Navigate to a view — trigger lazy Gantt fetch when going to Schedule ──
+  function handleSetView(newView) {
+    setView(newView)
+    // Kick off the lazy fetch when the user navigates to Schedule view.
+    // loadScheduleData() is idempotent — safe to call on every nav click.
+    if (newView === 'schedule' && analysis) {
+      loadScheduleData()
+    }
+  }
 
   function fmtDataDate(isoStr) {
     if (!isoStr) return null
@@ -550,7 +507,7 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
 
-      {/* ── App header ──────────────────────────────────────────────────────── */}
+      {/* ── App header ────────────────────────────────────────────────────── */}
       <div style={{ background: '#1E1E1E', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', height: 48 }}>
 
@@ -573,12 +530,10 @@ export default function App() {
             }}>
               {analysis.source_format?.toUpperCase()}
             </span>
-
           </>}
 
           <div style={{ flex: 1 }} />
 
-          {/* Export PDF — opens wizard, visible on health + schedule views */}
           {hasData && (view === 'health' || view === 'schedule') && (
             <PdfExportButton onOpenWizard={() => setShowWizard(true)} />
           )}
@@ -586,21 +541,24 @@ export default function App() {
         <div style={{ background: 'var(--grad)', height: 3 }} />
       </div>
 
-      {/* ── Main content ────────────────────────────────────────────────────── */}
+      {/* ── Main content ──────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
-        <NavPanel activeView={view} setView={setView} analysis={analysis} />
+        {/* NavPanel uses handleSetView so Schedule nav triggers the lazy fetch */}
+        <NavPanel activeView={view} setView={handleSetView} analysis={analysis} />
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-          {view === 'upload'   && <UploadView onNavigate={setView} />}
-          {view === 'health'   && (hasData ? <HealthCheckView onNavigate={setView} /> : <EmptyState label="No schedule loaded" onUpload={() => setView('upload')} />)}
-          {view === 'schedule' && (hasData ? <ScheduleView onNavigate={setView} />    : <EmptyState label="No schedule loaded" onUpload={() => setView('upload')} />)}
+          {view === 'upload'   && <UploadView   onNavigate={handleSetView} />}
+          {view === 'health'   && (hasData ? <HealthCheckView onNavigate={handleSetView} /> : <EmptyState label="No schedule loaded" onUpload={() => handleSetView('upload')} />)}
+          {view === 'schedule' && (hasData ? <ScheduleView   onNavigate={handleSetView} /> : <EmptyState label="No schedule loaded" onUpload={() => handleSetView('upload')} />)}
           {view === 'convert'  && <ConvertView />}
         </div>
       </div>
 
-      {/* ── Report Wizard modal ──────────────────────────────────────────────── */}
+      {/* ── Report Wizard modal ────────────────────────────────────────────── */}
+      {/* v1.3: pass scheduleData as separate prop so wizard can merge it into PDF payload */}
       {showWizard && analysis && (
         <ReportWizard
           analysis={analysis}
+          scheduleData={scheduleData}
           onClose={() => setShowWizard(false)}
         />
       )}

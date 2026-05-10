@@ -1,53 +1,146 @@
-// ── AnalysisContext.jsx ───────────────────────────────────────────────────────
+// ── context/AnalysisContext.jsx ───────────────────────────────────────────────
 //
-// PURPOSE: Shared state that lives above the React Router.
+// v1.3 changes:
+//   - Stores session_id from the /api/analyse response.
+//   - Adds scheduleData state — the Gantt payload (activities, wbs_nodes,
+//     relationships, calendars). Initially null; populated on demand.
+//   - Adds scheduleDataLoading and scheduleDataError state.
+//   - Exposes loadScheduleData() — called by App.jsx when the user navigates
+//     to Schedule view for the first time. Idempotent (no-ops if already loaded).
+//   - setAnalysis() now resets scheduleData/session on each new upload so a
+//     fresh upload always starts clean.
+//   - baseline unchanged (second upload, same shape as analysis).
 //
-// Why context and not just useState in App.jsx?
-// Because two separate *pages* (UploadView and DashboardView) need to read and
-// write the same data. Prop-drilling through the router shell would be messy.
-// Context is the React-idiomatic way to share state between sibling routes.
-//
-// WHAT IT STORES:
-//   analysis — the raw JSON response from POST /api/analyse (or null before upload).
-//              Shape matches the API spec in SKOPIA_PROJECT_INSTRUCTIONS.md.
-//
-// HOW TO USE IN A COMPONENT:
-//   import { useAnalysis } from '../context/AnalysisContext';
-//   const { analysis, setAnalysis } = useAnalysis();
+// USAGE:
+//   const { analysis, setAnalysis,
+//           scheduleData, scheduleDataLoading, scheduleDataError,
+//           loadScheduleData,
+//           baseline, setBaseline } = useAnalysis()
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useState, useCallback, useRef } from 'react'
+import { fetchScheduleData } from '../api'
 
-// 1. Create the context object with a default value of null.
-//    The default is only used if a component renders outside the provider —
-//    in practice every component is inside <AnalysisProvider>, so this is a
-//    safety net.
+// ── Context shape ─────────────────────────────────────────────────────────────
 const AnalysisContext = createContext(null)
 
-// 2. Provider component — wrap the entire app in this (see main.jsx).
-//    It owns the state and exposes both the value and the setter.
+export function useAnalysis() {
+  const ctx = useContext(AnalysisContext)
+  if (!ctx) throw new Error('useAnalysis must be used inside <AnalysisProvider>')
+  return ctx
+}
+
+// ── Provider ──────────────────────────────────────────────────────────────────
 export function AnalysisProvider({ children }) {
-  const [analysis,  setAnalysis]  = useState(null)
-  // baseline — the API response from a second upload (the baseline schedule).
-  // Activities are merged client-side into ScheduleView by matching on activity id.
-  // null until the user uploads a baseline file.
-  const [baseline,  setBaseline]  = useState(null)
+  // ── Health check result (from /api/analyse) ──────────────────────────────
+  const [analysis, _setAnalysis] = useState(null)
+
+  // ── Session token (returned with analysis, used for lazy Gantt fetch) ────
+  const [sessionId, setSessionId] = useState(null)
+
+  // ── Gantt payload (from /api/schedule-data/{sessionId}) — lazy ───────────
+  const [scheduleData,        setScheduleData]        = useState(null)
+  const [scheduleDataLoading, setScheduleDataLoading] = useState(false)
+  const [scheduleDataError,   setScheduleDataError]   = useState(null)
+
+  // Track whether a fetch is already in-flight so loadScheduleData() is safe
+  // to call multiple times (e.g. user rapidly clicks Schedule tab).
+  const fetchingRef = useRef(false)
+
+  // ── Baseline (second upload) ─────────────────────────────────────────────
+  // The baseline analysis response (same shape as analysis, no schedule_data).
+  // We auto-fetch baseline schedule_data immediately on baseline upload because
+  // ScheduleView needs it for Var BL columns. Unlike the primary schedule, the
+  // baseline Gantt payload is small and user-initiated, so eager fetch is fine.
+  const [baseline,             _setBaseline]             = useState(null)
+  const [baselineScheduleData, setBaselineScheduleData] = useState(null)
+
+  // setBaseline — called by UploadView after baseline upload succeeds.
+  // Auto-fetches the baseline's schedule_data using its session_id.
+  const setBaseline = useCallback(async (data) => {
+    _setBaseline(data)
+    setBaselineScheduleData(null)
+
+    const blSessionId = data?.session_id
+    if (!blSessionId) return
+
+    try {
+      const blScheduleData = await fetchScheduleData(blSessionId)
+      // Attach schedule_data directly onto the baseline object so ScheduleView's
+      // existing baseline?.schedule_data references work without any changes.
+      _setBaseline(prev => prev ? { ...prev, schedule_data: blScheduleData } : prev)
+      setBaselineScheduleData(blScheduleData)
+    } catch (_) {
+      // Baseline schedule_data fetch failed — Var BL columns just won't show.
+      // Not a fatal error; the health check data is still usable.
+    }
+  }, [])
+
+  // ── setAnalysis — called by UploadView after a successful upload ──────────
+  // Resets all derived state so switching schedules doesn't show stale data.
+  const setAnalysis = useCallback((data) => {
+    _setAnalysis(data)
+    // Extract session_id from the response and store it separately.
+    // This keeps AnalysisContext consumers from needing to know about session_id.
+    setSessionId(data?.session_id ?? null)
+    // Reset Gantt payload — it belongs to the previous upload's session.
+    setScheduleData(null)
+    setScheduleDataLoading(false)
+    setScheduleDataError(null)
+    fetchingRef.current = false
+  }, [])
+
+  // ── loadScheduleData — called when user navigates to Schedule view ────────
+  // Idempotent: no-ops if data is already loaded or a fetch is in flight.
+  // On session expiry (404), sets scheduleDataError with code SESSION_EXPIRED
+  // so ScheduleView can show a "re-upload" prompt rather than a generic error.
+  const loadScheduleData = useCallback(async () => {
+    // Already loaded — nothing to do
+    if (scheduleData) return
+
+    // Already fetching — don't double-up
+    if (fetchingRef.current) return
+
+    // No session — analysis not yet loaded (shouldn't happen via normal flow)
+    if (!sessionId) return
+
+    fetchingRef.current  = true
+    setScheduleDataLoading(true)
+    setScheduleDataError(null)
+
+    try {
+      const data = await fetchScheduleData(sessionId)
+      setScheduleData(data)
+    } catch (err) {
+      setScheduleDataError(err)
+    } finally {
+      setScheduleDataLoading(false)
+      fetchingRef.current = false
+    }
+  }, [sessionId, scheduleData])
+
+  // ── Context value ─────────────────────────────────────────────────────────
+  const value = {
+    // Health check result
+    analysis,
+    setAnalysis,
+
+    // Gantt data (lazy)
+    scheduleData,
+    scheduleDataLoading,
+    scheduleDataError,
+    loadScheduleData,
+
+    // Baseline (second upload — schedule_data auto-fetched and attached)
+    baseline,
+    setBaseline,
+    baselineScheduleData,
+  }
 
   return (
-    <AnalysisContext.Provider value={{ analysis, setAnalysis, baseline, setBaseline }}>
+    <AnalysisContext.Provider value={value}>
       {children}
     </AnalysisContext.Provider>
   )
-}
-
-// 3. Custom hook — the only way components should read the context.
-//    Throws a helpful error if called outside the provider (easier to debug
-//    than "cannot read property of undefined").
-export function useAnalysis() {
-  const ctx = useContext(AnalysisContext)
-  if (!ctx) {
-    throw new Error('useAnalysis must be used inside <AnalysisProvider>')
-  }
-  return ctx
 }
