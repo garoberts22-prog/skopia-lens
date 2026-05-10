@@ -1910,8 +1910,15 @@ export default function ScheduleView({ onNavigate }) {
     ganttScrollL0.current   = ganttScrollRef.current?.scrollLeft ?? 0
     document.body.style.cursor = 'grabbing'
   }
-  // rawActivities etc — scheduleData is guaranteed non-null by early returns below
-  const { activities: rawActivities, wbs_nodes:rawWbs, relationships, calendars: rawCalendars } = scheduleData || {}
+  // rawActivities etc — scheduleData is guaranteed non-null by early returns below.
+  // Safe empty defaults prevent .map()/.filter() crashes in useMemo hooks that run
+  // before the early returns fire (hooks always run, returns come after).
+  const {
+    activities:  rawActivities  = [],
+    wbs_nodes:   rawWbs         = [],
+    relationships               = [],
+    calendars:   rawCalendars   = {},
+  } = scheduleData || {}
 
   // ── Baseline merge (Option A — client-side) ──────────────────────────────
   // When a baseline file is uploaded via UploadView, its activities are matched
