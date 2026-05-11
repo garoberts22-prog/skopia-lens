@@ -552,12 +552,12 @@ export default function App() {
 
       {/* ── App header ──────────────────────────────────────────────────────── */}
       <div style={{ background: '#1E1E1E', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', height: 48 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', height: 65 }}>
 
-          <span style={{ fontFamily: 'var(--font-head)', fontSize: 17, fontWeight: 900, background: 'var(--grad)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--font-head)', fontSize: 25, fontWeight: 900, background: 'var(--grad)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', flexShrink: 0 }}>
             SKOPIA
           </span>
-          <span style={{ color: '#475569', fontSize: 13, fontFamily: 'var(--font-head)', fontWeight: 700, flexShrink: 0 }}>
+          <span style={{ color: '#475569', fontSize: 17, fontFamily: 'var(--font-head)', fontWeight: 700, flexShrink: 0 }}>
             .lens
           </span>
 

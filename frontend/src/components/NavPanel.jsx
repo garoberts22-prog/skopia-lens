@@ -36,8 +36,8 @@ export default function NavPanel({ activeView, setView, analysis }) {
   // badge: null = no badge shown; a value = shown in the badge chip
   const navItems = [
     { id: 'upload',    icon: '⬆',  label: 'Upload',    badge: null },
-    { id: 'schedule',  icon: '▦',   label: 'Schedule',  badge: activityCount },
-    { id: 'health',    icon: '◈',   label: 'Health Check', badge: grade },
+    { id: 'schedule',  icon: '▦',   label: 'Schedule',  badge: null },
+    { id: 'health',    icon: '◈',   label: 'Health Check', badge: null },
     { id: 'convert',   icon: '⇄',   label: 'Convert',   badge: null },
   ]
 
