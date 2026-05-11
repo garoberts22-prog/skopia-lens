@@ -113,7 +113,7 @@ export default function CheckSettingsCog({ checkId, settings, onSettingsChange, 
     const pop    = popoverRef.current
     const popH   = pop.offsetHeight
     const left   = Math.max(8, btn.right - 264)
-    const top    = Math.max(8, btn.top - popH - 0)
+    const top = Math.max(8, btn.top - popH - 0)
     pop.style.left = left + 'px'
     pop.style.top  = top  + 'px'
   }, [open])
@@ -143,12 +143,12 @@ export default function CheckSettingsCog({ checkId, settings, onSettingsChange, 
         onClick={e => { e.stopPropagation(); setOpen(o => !o) }}
         title="Check settings"
         style={{
-          width: 22, height: 22, borderRadius: 4, border: 'none',
+          width: 33, height: 33, borderRadius: 6, border: 'none',
           background: open ? SK.peri : hasChanges ? '#FEF3C7' : 'transparent',
           color: open ? '#fff' : hasChanges ? SK.warn : SK.muted,
           cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 13, flexShrink: 0,
+          fontSize: 19, flexShrink: 0,
           transition: 'background 0.12s, color 0.12s',
         }}
       >

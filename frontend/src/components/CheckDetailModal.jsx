@@ -269,8 +269,46 @@ export default function CheckDetailModal({ check, analysis, onClose }) {
           {/* Float histogram */}
           {isFloat && <FloatHistogram bins={analysis?.float_histogram?.bins} />}
 
-          {/* Bottleneck table */}
-          {isBottleneck && <BottleneckTable bottlenecks={topBottlenecks} />}
+          {/* Bottleneck top-10 table — uses network_metrics.top_bottlenecks */}
+          {isBottleneck && topBottlenecks.length > 0 && (
+            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${SK.border}` }}>
+              <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', color: SK.muted, marginBottom: 10 }}>
+                Top {topBottlenecks.length} Bottleneck Activities (by Fan-In × Fan-Out Score)
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--font-body)', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `2px solid ${SK.border}` }}>
+                      {['Activity ID', 'Name', 'Fan-In', 'Fan-Out', 'Score', 'Float', 'Critical'].map(h => (
+                        <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em', color: SK.muted, whiteSpace: 'nowrap' }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topBottlenecks.map((b, i) => (
+                      <tr key={`${b.id}-${i}`} style={{ borderBottom: `1px solid ${SK.border}`, background: i % 2 === 0 ? 'transparent' : SK.bg }}>
+                        <td style={{ padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: SK.peri, whiteSpace: 'nowrap' }}>{b.id}</td>
+                        <td style={{ padding: '6px 10px', color: SK.text, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.name}</td>
+                        <td style={{ padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: SK.text, textAlign: 'center' }}>{b.fan_in}</td>
+                        <td style={{ padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: SK.text, textAlign: 'center' }}>{b.fan_out}</td>
+                        <td style={{ padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700, color: b.score >= 12 ? SK.fail : b.score >= 6 ? SK.warn : SK.muted, textAlign: 'center' }}>{b.score}</td>
+                        <td style={{ padding: '6px 10px', fontFamily: 'var(--font-mono)', fontSize: 11, color: b.float_days === 0 ? SK.fail : SK.muted, textAlign: 'center' }}>
+                          {b.float_days != null ? `${b.float_days}d` : '—'}
+                        </td>
+                        <td style={{ padding: '6px 10px', textAlign: 'center' }}>
+                          {b.is_critical
+                            ? <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, color: SK.fail }}>CP</span>
+                            : <span style={{ color: SK.border }}>—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Logic density heatmap */}
           {isHeatmap && (
