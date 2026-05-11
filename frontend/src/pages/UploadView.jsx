@@ -314,7 +314,7 @@ export default function UploadView({ onNavigate }) {
             }}
           />
 
-          {/* Stats strip — shown once a file is loaded */}
+                    {/* Stats strip — shown once a file is loaded */}
           {hasData && (
             <div style={{
               marginTop:    8,
@@ -327,6 +327,7 @@ export default function UploadView({ onNavigate }) {
               color:        'var(--sk-muted)',
               display:      'flex',
               gap:          16,
+              alignItems:   'center',  // vertically align text + button
             }}>
               <span>
                 <b style={{ color: 'var(--sk-text)' }}>
@@ -347,6 +348,22 @@ export default function UploadView({ onNavigate }) {
                   {analysis.source_format?.toUpperCase()}
                 </b>
               </span>
+
+              {/* Clear current schedule — also clears baseline since it has no context without a current schedule */}
+              <button
+                onClick={() => { setAnalysis(null); setBaseline(null) }}
+                style={{
+                  marginLeft: 'auto',
+                  background: 'none',
+                  border:     'none',
+                  color:      'var(--sk-muted)',
+                  cursor:     'pointer',
+                  fontSize:   11,
+                  fontFamily: 'var(--font-body)',
+                }}
+                title="Remove schedule">
+                ✕ Clear
+              </button>
             </div>
           )}
 
