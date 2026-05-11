@@ -331,7 +331,7 @@ export default function UploadView({ onNavigate }) {
             }}>
               <span>
                 <b style={{ color: 'var(--sk-text)' }}>
-                  {analysis.summary_stats.total_activities}
+                  {analysis.schedule_data?.activities?.length ?? s.total_activities}
                 </b> activities
               </span>
               <span>
@@ -492,7 +492,7 @@ export default function UploadView({ onNavigate }) {
               borderRadius: 8, fontSize: 11, fontFamily: 'var(--font-mono)',
               color: 'var(--sk-muted)', display: 'flex', gap: 16, alignItems: 'center',
             }}>
-              <span><b style={{ color: 'var(--sk-text)' }}>{baseline.summary_stats.total_activities}</b> activities</span>
+              <span><b style={{ color: 'var(--sk-text)' }}>{baseline.schedule_data?.activities?.length ?? s.total_activities}</b> activities</span>
               <span><b style={{ color: '#7C3AED' }}>{baseline.source_format?.toUpperCase()}</b></span>
               {/* Clear baseline button */}
               <button
