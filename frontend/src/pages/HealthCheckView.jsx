@@ -171,15 +171,15 @@ function CheckCard({ check, onClick, settings, onSettingsChange, onRerun, isDirt
       {/* Top row: status icon + check name + DCMA + cog */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
         {/* Status dot */}
-        <span style={{ color: sc, fontSize: 11, marginTop: 2, flexShrink: 0 }}>●</span>
+        <span style={{ color: sc, fontSize: 9, marginTop: 2, flexShrink: 0 }}>●</span>
 
         {/* Name + DCMA */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 14, color: SK.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 11, color: SK.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {check.check_name}
           </div>
           {check.dcma_ref && (
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: SK.muted, marginTop: 1 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: SK.muted, marginTop: 1 }}>
               {check.dcma_ref}
             </div>
           )}
@@ -198,17 +198,17 @@ function CheckCard({ check, onClick, settings, onSettingsChange, onRerun, isDirt
       {/* Metric value — large, coloured */}
       <div style={{
         fontFamily: 'var(--font-mono)', fontWeight: 700,
-        fontSize: 23, color: sc, lineHeight: 1, marginTop: 2,
+        fontSize: 18, color: sc, lineHeight: 1, marginTop: 2,
       }}>
         {fmtMetric(check)}
       </div>
 
       {/* Threshold + flagged count */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: SK.muted }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: SK.muted }}>
           {fmtThreshold(check) && <span>{fmtThreshold(check)}</span>}
         </div>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: SK.muted }}>
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: SK.muted }}>
           {check.population_count > 0
             ? check.flagged_count > 0
               ? `${check.flagged_count} flagged`
@@ -365,7 +365,7 @@ export default function HealthCheckView({ onNavigate }) {
           {/* Stat tiles — 3×2 grid */}
           <div style={{ flex: 1, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gridTemplateRows: 'repeat(2,1fr)', gap: 8 }}>
             {[
-              { l: 'Total Activities', v: s.detail_tasks },
+              { l: 'Total Activities', v: analysis.schedule_data?.activities?.length ?? s.total_activities },
               { l: 'Incomplete',       v: s.incomplete_tasks },
               { l: 'Complete',         v: s.completed_tasks },
               { l: 'In Progress',      v: s.in_progress_tasks },

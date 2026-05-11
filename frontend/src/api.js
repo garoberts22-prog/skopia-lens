@@ -1,11 +1,15 @@
 // ── api.js ────────────────────────────────────────────────────────────────────
 //
-// v1.3 changes:
-//   - uploadSchedule() unchanged in calling convention, but the response no
-//     longer contains schedule_data. It now contains a session_id instead.
-//   - fetchScheduleData(sessionId) — new. Calls GET /api/schedule-data/{id}
-//     to retrieve the Gantt payload lazily. Called by AnalysisContext when
-//     the user first navigates to Schedule view.
+// Single responsibility: POST the schedule file to the FastAPI backend and
+// return the parsed JSON response.
+//
+// The Vite proxy (vite.config.js) rewrites /api/* → http://localhost:8000/api/*
+// so we use a relative URL here. That means this file needs zero changes when
+// you deploy — just update the proxy target (or set an env var).
+//
+// HOW TO USE:
+//   import { uploadSchedule } from '../api'
+//   const data = await uploadSchedule(file)  // throws on error
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -13,114 +17,71 @@
  * uploadSchedule — POST a .xer or .mpp file to the analysis endpoint.
  *
  * @param {File}     file       — The File object from the drag-drop / input event
- * @param {Function} onProgress — Optional callback(stageName) for progress UI.
+ * @param {Function} onProgress — Optional callback(stageName) called as stages advance.
+ *                                Used by UploadView to show the progress indicator.
  *                                Stages: 'uploading' | 'parsing' | 'checking' | 'building'
- * @returns {Promise<Object>}    — Health report JSON (includes session_id, no schedule_data)
+ * @returns {Promise<Object>}    — The full JSON response from /api/analyse
  * @throws  {Error}              — On network failure or non-2xx HTTP status
  */
 export async function uploadSchedule(file, onProgress) {
-  // Validate extension before sending
+  // Validate extension before sending — give the user an error instantly
+  // rather than waiting for the server to reject it.
   const ext = file.name.split('.').pop().toLowerCase()
   if (!['xer', 'mpp', 'xml'].includes(ext)) {
     throw new Error(`Unsupported file type ".${ext}". Please upload a .xer or .mpp file.`)
   }
 
+  // Stage 1 — notify UI we're uploading
   onProgress?.('uploading')
 
+  // multipart/form-data — the field name must match FastAPI's parameter name.
+  // In api/main.py: `async def analyse_schedule(file: UploadFile = File(...))`
+  // So the form field must be named "file".
   const formData = new FormData()
   formData.append('file', file)
 
+  // Stage 2 — file is being sent; notify UI
   onProgress?.('parsing')
 
   let response
-  try {
     const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-  response = await fetch(`${API_BASE}/api/analyse`, {
+
+    response = await fetch(`${API_BASE}/api/analyse`, {
       method: 'POST',
       body: formData,
-      // Do NOT set Content-Type manually with FormData — browser sets the boundary.
     })
-  } catch (networkErr) {
-    throw new Error(
-      'Could not reach the SKOPIA Lens backend. ' +
-      'Make sure the FastAPI server is running: uvicorn api.main:app --reload --port 8000'
-    )
-  }
 
+  // Stage 3 — server responded, parse JSON
   onProgress?.('checking')
 
   const body = await response.json()
 
   if (!response.ok) {
+    // The FastAPI backend returns structured error objects:
+    // { error: "parse_error" | "unsupported_format" | "internal_error", message: "...", ... }
     const msg = body?.detail?.message || body?.detail || `HTTP ${response.status}`
     throw new Error(msg)
   }
 
+  // Stage 4 — building response
   onProgress?.('building')
 
-  // Response now contains session_id but NOT schedule_data.
-  // ScheduleView fetches schedule_data lazily via fetchScheduleData().
   return body
 }
-
-
-/**
- * fetchScheduleData — GET the Gantt payload for a previously-analysed schedule.
- *
- * Called by AnalysisContext.loadScheduleData() when the user first navigates
- * to the Schedule view. The session_id was returned by uploadSchedule() and
- * stored in context.
- *
- * @param {string} sessionId   — UUID returned by /api/analyse
- * @returns {Promise<Object>}  — schedule_data block: { activities, wbs_nodes, relationships, calendars }
- * @throws  {Error}            — On network failure, 404 (expired), or non-2xx status
- */
-export async function fetchScheduleData(sessionId) {
-  let response
-  try {
-    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-  response = await fetch(`${API_BASE}/api/schedule-data/${sessionId}`)
-  } catch (networkErr) {
-    throw new Error(
-      'Could not reach the SKOPIA Lens backend. ' +
-      'Make sure the server is running.'
-    )
-  }
-
-  const body = await response.json()
-
-  if (response.status === 404) {
-    // Session expired (> 10 min since upload) or invalid ID.
-    // Caller should show a re-upload prompt.
-    const err = new Error(
-      body?.detail?.message ||
-      'Session expired. Please re-upload your schedule to view the Gantt.'
-    )
-    err.code = 'SESSION_EXPIRED'
-    throw err
-  }
-
-  if (!response.ok) {
-    const msg = body?.detail?.message || body?.detail || `HTTP ${response.status}`
-    throw new Error(msg)
-  }
-
-  return body
-}
-
-
 /**
  * exportPdf — POST the analysis JSON to /api/export/pdf and download the PDF.
  *
  * @param {Object}   analysis    — The full analysis object from AnalysisContext
  * @param {string}   projectName — Display name for the PDF filename (optional)
- * @returns {Promise<void>}
- * @throws  {Error}
+ * @returns {Promise<void>}      — Resolves when the download starts
+ * @throws  {Error}              — On network failure or non-2xx HTTP status
  */
 export async function exportPdf(analysis, projectName = 'Schedule') {
+  // The backend accepts JSON — not FormData. Use application/json.
   let response
   try {
     const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
     response = await fetch(`${API_BASE}/api/export/pdf`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -138,26 +99,33 @@ export async function exportPdf(analysis, projectName = 'Schedule') {
     try {
       const errBody = await response.json()
       msg = errBody?.detail?.message || errBody?.detail || msg
-    } catch (_) {}
+    } catch (_) { /* ignore parse errors on error bodies */ }
     throw new Error(msg)
   }
 
+  // The backend returns a binary PDF blob. Convert the response body to a
+  // Blob, create an object URL, simulate a link click → triggers download.
   const blob = await response.blob()
 
-  const safe = (projectName || 'Schedule')
+  // Build filename: "SKOPIA_Report_ProjectName_YYYYMMDD.pdf"
+  const safe = projectName
     .replace(/[^a-zA-Z0-9 ._-]/g, '_')
     .trim()
     .replace(/\s+/g, '_')
     .slice(0, 40)
-  const today    = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
   const filename = `SKOPIA_Report_${safe}_${today}.pdf`
 
+  // Trigger browser download without navigating away
   const url = URL.createObjectURL(blob)
-  const a   = document.createElement('a')
-  a.href     = url
+  const a = document.createElement('a')
+  a.href = url
   a.download = filename
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
+
+  // Release the object URL after a short delay so the browser can start
+  // the download before we revoke it
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
