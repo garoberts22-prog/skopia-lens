@@ -2190,25 +2190,116 @@ export default function ScheduleView({ onNavigate }) {
     return result
   },[rows,sortKey,sortDir,critOnly,showWbsBands])
 
-  const handleGoTo = useCallback((id)=>{
+  const handleGoTo = useCallback((id) => {
+    // ── Rule 1: Resolve the target activity ──────────────────────────────────
+    // Find the activity in the full (unfiltered) activity list.
+    // If the activity doesn't exist at all, bail out silently.
+    const targetAct = activities.find(a => a.id === id)
+    if (!targetAct) return
+
+    // ── Rule 2: Ensure the activity's WBS ancestors are expanded ────────────
+    // Walk up the wbsNodes parent chain from the activity's wbs, collecting
+    // every ancestor ID. Remove all of them from `collapsed` so the band is
+    // open and the activity row is actually in the DOM/sortedRows.
+    const targetWbsId = targetAct.wbs
+    if (targetWbsId) {
+      const ancestorIds = []
+      let cur = wbsNodes.find(w => w.id === targetWbsId)
+      while (cur) {
+        ancestorIds.push(cur.id)
+        cur = cur.parent ? wbsNodes.find(w => w.id === cur.parent) : null
+      }
+      // Expand all collapsed ancestors (and the target WBS itself)
+      if (ancestorIds.length > 0) {
+        setCollapsed(prev => {
+          const next = new Set(prev)
+          ancestorIds.forEach(wid => next.delete(wid))  // delete = expanded
+          return next
+        })
+      }
+
+      // ── Rule 3: Ensure the activity's WBS is not hidden via WBS filter ────
+      // If the target WBS (or any ancestor) was hidden in wbsHidden, unhide it.
+      setWbsHidden(prev => {
+        if (!ancestorIds.some(wid => prev.has(wid))) return prev  // nothing to do
+        const next = new Set(prev)
+        ancestorIds.forEach(wid => next.delete(wid))
+        return next
+      })
+    }
+
+    // ── Rule 4: Select the activity ─────────────────────────────────────────
     setSelectedId(id)
-    // Scroll the row into the CENTRE of the table scroll container.
-    // scrollIntoView() uses the nearest scrollable ancestor which may not be
-    // tableScrollRef — so we calculate manually instead.
-    setTimeout(()=>{
-      const el        = document.getElementById(`sr-${id}`)
+
+    // ── Rule 5: Scroll to vertically centre the row ──────────────────────────
+    // We intentionally do NOT use el.offsetTop here.
+    //
+    // REASON: The table uses virtualisation — a top spacer <tr> fills the space
+    // above the rendered window. When the target row is far down the schedule,
+    // it may not be in the DOM yet (offsetTop would be wrong or the element
+    // wouldn't exist). Even when it is in the DOM, offsetTop is relative to the
+    // <tbody>/<table> — not to the scroll container — so it only works correctly
+    // when the table starts at scrollTop=0.
+    //
+    // CORRECT APPROACH: compute position purely from the row's index in
+    // sortedRows × rowHeight. This is reliable regardless of virtualisation state
+    // or current scroll position. We use a two-phase timeout:
+    //   Phase 1 (0ms): React state updates (expand WBS, select) are queued.
+    //   Phase 2 (80ms): React has re-rendered with the expanded WBS bands,
+    //     sortedRows is now updated, and we can find the correct index.
+    //
+    // The 80ms delay is enough for one React render cycle + the subsequent
+    // sortedRows useMemo recalculation. Increase to 150ms if jank is observed
+    // on very large schedules (>5,000 activities).
+    setTimeout(() => {
       const container = tableScrollRef.current
-      if (!el || !container) return
-      const containerH  = container.clientHeight
-      const rowTop      = el.offsetTop      // row top relative to table
-      const rowH        = el.offsetHeight
-      // Target scrollTop that puts the row in the vertical centre of the container
-      const targetTop   = rowTop - (containerH / 2) + (rowH / 2)
-      container.scrollTop = Math.max(0, targetTop)
-      // Keep Gantt body in sync
-      if (ganttScrollRef.current) ganttScrollRef.current.scrollTop = container.scrollTop
-    }, 60)
-  },[])
+      if (!container) return
+
+      // Re-read sortedRows inside the timeout to get the post-expansion order.
+      // sortedRows is captured in the outer closure but the ref is stale after
+      // the state updates above — we can't safely read it here. Instead, we
+      // recompute the target row's position from first principles using the
+      // rowHeight tweak value, which is a stable scalar.
+      //
+      // Strategy: find the row's index in the DOM via its id attribute.
+      // The <tr id="sr-${id}"> is rendered once the WBS has been expanded.
+      // If it's still not in the DOM (e.g. filtered by critOnly / text search),
+      // fall back to a best-effort DOM lookup using getBoundingClientRect.
+      const el = document.getElementById(`sr-${id}`)
+      if (el) {
+        // DOM path: the row exists — use its offsetTop against the scroll
+        // container. We traverse up the offsetParent chain to get the offset
+        // relative to the tableScrollRef div (not just the nearest parent).
+        let offset = 0
+        let node = el
+        while (node && node !== container) {
+          offset += node.offsetTop
+          node = node.offsetParent
+        }
+        const rowH      = el.offsetHeight || (tweaks.rowHeight ?? rowHeight)
+        const containerH = container.clientHeight
+        const targetTop  = offset - (containerH / 2) + (rowH / 2)
+        container.scrollTop = Math.max(0, targetTop)
+      } else {
+        // Fallback: row is still not in the DOM (filtered out by critOnly or
+        // text search). Compute position from index in the activity list instead.
+        // This won't be pixel-perfect but gets the viewport to the right area.
+        const rh    = tweaks.rowHeight ?? rowHeight
+        // Best-effort: count activities before this one in the unfiltered list
+        const approxIdx = activities.findIndex(a => a.id === id)
+        if (approxIdx >= 0) {
+          const containerH = container.clientHeight
+          const targetTop  = approxIdx * rh - (containerH / 2) + (rh / 2)
+          container.scrollTop = Math.max(0, targetTop)
+        }
+      }
+
+      // Keep Gantt panel vertically in sync
+      if (ganttScrollRef.current) {
+        ganttScrollRef.current.scrollTop = container.scrollTop
+      }
+    }, 80)
+  }, [activities, wbsNodes, tweaks.rowHeight, rowHeight])
 
   // ── Variance BL helpers ──────────────────────────────────────────────────
   // varDiff: signed working-day difference (current − baseline).

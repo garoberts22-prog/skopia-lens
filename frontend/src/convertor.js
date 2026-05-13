@@ -1,8 +1,58 @@
 /**
- * SKOPIA Schedule Convertor — Conversion Logic (v0.3)
+ * SKOPIA Schedule Convertor — Conversion Logic (v0.6)
  *
  * Pure utility functions. No DOM references, no React, no side effects.
  * Safe to import anywhere.
+ *
+ * v0.6 fix (MSP→XER wbs_short_name):
+ *   - Fix 6: wbs_short_name in PROJWBS now writes sequential integer code segments
+ *     (1, 2, 3...) per parent level instead of the full task name.
+ *     Root node wbs_short_name uses a sanitised project name abbreviation.
+ *
+ *     Root cause: P6 stores two separate PROJWBS fields:
+ *       wbs_short_name → code segment P6 concatenates for the dotted WBS ID
+ *       wbs_name       → friendly display name shown in the Gantt
+ *     The previous code wrote t.name (e.g. 'Town Planning') into wbs_short_name.
+ *     P6 then built paths as 'ResidentialHouseBuild.Planning.TownPlanning...'
+ *     — the long WBS name string seen in the converted schedule.
+ *
+ *     Fix: childCounters{parentWbsId} generates sequential short codes per
+ *     parent, producing 'RHB.1', 'RHB.1.1', 'RHB.1.1.1' etc. in P6.
+ *     wbs_name continues to receive the full friendly name (t.name). ✓
+ *     Ref: SKOPIA Lens WBS Name Fix lessons learnt document.
+ *
+ * v0.5 fix (production test — RHB_TEST.xer):
+ *   - Fix 5: Root WBS node skipped in walkWbs() — eliminates duplicate project
+ *     name in MSP Activity Name path column.
+ *     The P6 root WBS (e.g. 'Residential House Build', wbs_id=100) is the project
+ *     container. Emitting it as an OutlineLevel=0 summary task caused MSP to build
+ *     the path as "[ProjectName] · [RootWBS] · [Child] ..." producing:
+ *       "Residential House Build · Residential House Build · Planning · ..."
+ *     Fix: walkWbs() now accepts an isRoot flag. When true, the root node is not
+ *     emitted to orderedItems — its children are walked directly at level=1.
+ *     This maps P6's WBS hierarchy to MSP OutlineLevels 1..N, with the MSP
+ *     Project Summary sentinel (UID=0) acting as the implicit level-0 container.
+ *     Result: "Planning · Town Planning · Planning Applications" — matching P6.
+ *
+ * v0.4 fixes (skill audit):
+ *   - Fix 1: MSO vs SNET for FF/SF predecessor tasks.
+ *     needsSnetAnchor boolean map replaced with needsMSO + needsSNET maps.
+ *     FF/SF tasks now correctly write ConstraintType=2 (MSO) to pin the start
+ *     date exactly and prevent MSP FF enforcement cascade. Previously all
+ *     anchored tasks wrote SNET(4) regardless, allowing MSP to push tasks
+ *     further than the floor on FF relationships. (Skill: Lesson 3 / Lesson 9)
+ *   - Fix 2: Calendar fallback shift window derived from day_hr_cnt.
+ *     Replaced hardcoded 07:00-17:00 fallback with defaultShifts(dayHrs):
+ *     <=8hr split, <=10hr single, >10hr 06:00+(dayHrs). Prevents 20% duration
+ *     inflation on 12-hour-calendar schedules. (Skill: Lesson 11)
+ *   - Fix 3: Empty WBS nodes filtered before XML emission.
+ *     wbsHasTasks() pre-computed recursively; WBS with no descendant detail
+ *     tasks are skipped. Prevents MSP summary rollup contamination from
+ *     childless summary tasks with bogus default dates. (Skill: Lesson 12)
+ *   - Fix 4: Format A calendar parsing upgraded to paren-depth extraction.
+ *     Replaced VIEW-anchored regex with whitespace-strip + paren-depth walk.
+ *     Fixes silent failure on whitespace-formatted clndr_data and correctly
+ *     captures all shifts in split-shift calendars. (Skill: Lesson 10)
  *
  * v0.2 additions:
  *   - Resource/assignment conversion in both directions
@@ -550,14 +600,26 @@ export function validateMSPXML(bytes) {
  */
 export function parseCalendarWorkPattern(clndrData, is7Day, dayHrs) {
   const result = { days: {} };
-  // Set defaults first (overwritten if data is found)
+  // Set defaults first (overwritten if data is found).
+  //
+  // Fallback shifts derived from day_hr_cnt — Skill Lesson 11:
+  //   <= 8hr  → split shift 08:00-12:00 + 13:00-17:00
+  //   <= 10hr → single shift 07:00-17:00
+  //   > 10hr  → single shift 06:00 to (06:00 + dayHrs), e.g. 12hr = 06:00-18:00
+  // WARNING: hardcoding 07:00-17:00 for all dayHrs>=10 was a production bug that
+  // caused 20% duration inflation on 12-hour calendars due to 10hr vs 12hr mismatch.
+  function defaultShifts(hrs) {
+    if (hrs <= 8)  return [{ from: '08:00', to: '12:00' }, { from: '13:00', to: '17:00' }];
+    if (hrs <= 10) return [{ from: '07:00', to: '17:00' }];
+    // >10hr: anchor start at 06:00, derive end from hour count
+    const endH = String(6 + hrs).padStart(2, '0');
+    return [{ from: '06:00', to: endH + ':00' }];
+  }
   for (let d = 1; d <= 7; d++) {
     const isWorkday = is7Day ? true : (d >= 2 && d <= 6);
     result.days[d] = {
       working: isWorkday,
-      shifts: isWorkday
-        ? (dayHrs >= 10 ? [{ from: '07:00', to: '17:00' }] : [{ from: '08:00', to: '12:00' }, { from: '13:00', to: '17:00' }])
-        : [],
+      shifts: isWorkday ? defaultShifts(dayHrs) : [],
     };
   }
   if (!clndrData) return result;
@@ -593,22 +655,60 @@ export function parseCalendarWorkPattern(clndrData, is7Day, dayHrs) {
     return result;
   }
 
-  // ── Format A: Legacy parenthesis format ───────────────────────────────────
-  const dowMatch = clndrData.match(/DaysOfWeek\(\)\([\s\S]*?\)\)[\x7F]/);
-  if (!dowMatch) return result;
-  const block = dowMatch[0];
+  // ── Format A: Legacy parenthesis format — paren-depth extraction ─────────
+  //
+  // WHY paren-depth instead of regex: Skill Lesson 10.
+  // A VIEW-anchored regex fails silently on whitespace-formatted clndr_data
+  // (produced by some P6 versions). The non-greedy inner match also stops at
+  // the first ')' in a day with multiple shift entries, dropping split shifts.
+  // Fix: strip all whitespace, find the DaysOfWeek()( marker, then walk forward
+  // counting paren depth to extract the entire content block.
+  const clean = clndrData.replace(/\s/g, '');  // strip whitespace — normalise format
+  const DOW_MARKER = 'DaysOfWeek()(';
+  const dowStart = clean.indexOf(DOW_MARKER);
+  if (dowStart === -1) return result;  // marker not found — fall back to defaults
 
-  const dayRe = /\(0\|\|(\d)\(\)\(([\s\S]*?)\)\)/g;
-  let dm;
-  while ((dm = dayRe.exec(block)) !== null) {
-    const dayNum   = parseInt(dm[1]);
-    const shiftBlk = dm[2].trim();
-    if (!shiftBlk) { result.days[dayNum] = { working: false, shifts: [] }; continue; }
-    const shifts = [];
-    const shiftRe = /\(s\|(\d{2}:\d{2})\|f\|(\d{2}:\d{2})\)/g;
-    let sm;
-    while ((sm = shiftRe.exec(shiftBlk)) !== null) shifts.push({ from: sm[1], to: sm[2] });
-    result.days[dayNum] = { working: shifts.length > 0, shifts };
+  // Walk forward from the opening ( of the DaysOfWeek block, counting depth,
+  // to find the full matching close paren.
+  let pos    = dowStart + DOW_MARKER.length - 1;  // position of the outer (
+  let depth  = 0;
+  let dowEnd = -1;
+  for (let i = pos; i < clean.length; i++) {
+    if (clean[i] === '(') depth++;
+    else if (clean[i] === ')') { depth--; if (depth === 0) { dowEnd = i; break; } }
+  }
+  if (dowEnd === -1) return result;  // malformed — fall back to defaults
+
+  const dowBlock = clean.slice(pos + 1, dowEnd);  // content between outer parens
+
+  // Extract each day entry: (0||N()(...shifts...))
+  // Use paren-depth walk per day to capture ALL shifts (handles split shifts).
+  let di = 0;
+  while (di < dowBlock.length) {
+    // Find next (0||N()( pattern
+    const dayMarkerRe = /\(0\|(\d)\(\)\(/g;
+    dayMarkerRe.lastIndex = di;
+    const dm = dayMarkerRe.exec(dowBlock);
+    if (!dm) break;
+    const dayNum = parseInt(dm[1]);
+    // Walk from the inner ( to find the matching close
+    const innerStart = dm.index + dm[0].length - 1;  // position of opening ( of shifts block
+    let d2 = 0, shiftEnd = -1;
+    for (let i = innerStart; i < dowBlock.length; i++) {
+      if (dowBlock[i] === '(') d2++;
+      else if (dowBlock[i] === ')') { d2--; if (d2 === 0) { shiftEnd = i; break; } }
+    }
+    const shiftBlk = shiftEnd > innerStart ? dowBlock.slice(innerStart + 1, shiftEnd) : '';
+    if (!shiftBlk) {
+      result.days[dayNum] = { working: false, shifts: [] };
+    } else {
+      const shifts = [];
+      const shiftRe = /\(s\|(\d{2}:\d{2})\|f\|(\d{2}:\d{2})\)/g;
+      let sm;
+      while ((sm = shiftRe.exec(shiftBlk)) !== null) shifts.push({ from: sm[1], to: sm[2] });
+      result.days[dayNum] = { working: shifts.length > 0, shifts };
+    }
+    di = shiftEnd > innerStart ? shiftEnd + 1 : dayMarkerRe.lastIndex;
   }
   return result;
 }
@@ -805,13 +905,47 @@ export function convertXERtoMSP(parsedData, origFilename) {
     tasksByWbs[t.wbs_id].push(t);
   });
 
-  const orderedItems = [];
-  function walkWbs(wbsId, level) {
-    orderedItems.push({ type: 'wbs', data: wbsMap[wbsId], level });
-    (tasksByWbs[wbsId] || []).forEach(t => orderedItems.push({ type: 'task', data: t, level: level + 1 }));
-    (wbsChildren[wbsId] || []).forEach(c => walkWbs(c.wbs_id, level + 1));
+  // Pre-compute which WBS nodes have at least one descendant detail task.
+  // Skill Lesson 12 / Section 2: Empty WBS nodes in MSP XML have no children
+  // for the auto-scheduler to roll up from — MSP assigns arbitrary default dates
+  // that contaminate parent WBS rollup. Skip them entirely.
+  function wbsHasTasks(wbsId) {
+    if ((tasksByWbs[wbsId] || []).length > 0) return true;
+    return (wbsChildren[wbsId] || []).some(c => wbsHasTasks(c.wbs_id));
   }
-  if (rootWbs) walkWbs(rootWbs.wbs_id, 0);
+
+  const orderedItems = [];
+  let emptyWbsSkipped = 0;
+
+  // walkWbs emits a WBS node as an MSP summary task, then recurses into children.
+  // The ROOT WBS node in P6 is the project container — it corresponds to the MSP
+  // Project Summary (UID 0 sentinel), NOT a separate summary task.
+  //
+  // WHY skip the root: If the root WBS (e.g. wbs_name='Residential House Build') is
+  // emitted at OutlineLevel=0, MSP shows the Activity Name path as:
+  //   "Residential House Build · Residential House Build · Planning · ..."
+  //   = [project <Name>] · [root WBS task] · [child WBS] ...
+  // The project name and root WBS name are the same string, producing the
+  // double-name duplication seen in production testing.
+  //
+  // Fix: skip the root node itself, walk only its children starting at level=1.
+  // This maps P6's hierarchy directly to MSP outline levels 1..N, with the
+  // MSP project root (sentinel UID=0) acting as the implicit level-0 container.
+  function walkWbs(wbsId, level, isRoot) {
+    if (!isRoot) {
+      // Non-root node: emit as MSP summary task if it has descendant tasks
+      if (!wbsHasTasks(wbsId)) { emptyWbsSkipped++; return; }
+      orderedItems.push({ type: 'wbs', data: wbsMap[wbsId], level });
+      (tasksByWbs[wbsId] || []).forEach(t => orderedItems.push({ type: 'task', data: t, level: level + 1 }));
+      (wbsChildren[wbsId] || []).forEach(c => walkWbs(c.wbs_id, level + 1, false));
+    } else {
+      // Root node: skip self, walk children at level=1
+      // Any tasks directly under the root WBS (unusual but valid) go at level=1
+      (tasksByWbs[wbsId] || []).forEach(t => orderedItems.push({ type: 'task', data: t, level: 1 }));
+      (wbsChildren[wbsId] || []).forEach(c => walkWbs(c.wbs_id, 1, false));
+    }
+  }
+  if (rootWbs) walkWbs(rootWbs.wbs_id, 0, true);
 
   // Pre-assign UIDs
   let uidCtr = 1;
@@ -829,14 +963,35 @@ export function convertXERtoMSP(parsedData, origFilename) {
     predsByTask[p.task_id].push(p);
   });
 
-  // Selective SNET anchoring — only where MSP engine diverges from P6
-  const needsSnetAnchor = {};
+  // Selective SNET/MSO anchoring — only where MSP engine diverges from P6.
+  //
+  // WHY two maps instead of one boolean:
+  //   Pure FS/SS networks: schedule identically in both engines → no anchor needed.
+  //   No-predecessor tasks: engine diverges at project start → SNET floor.
+  //   ALAP tasks: MSP ALAP pushes to latest possible date (different from P6) → SNET floor.
+  //   FF/SF predecessors: MSP enforces FF strictly (successor finish >= pred finish),
+  //     pushing the successor's start forward. SNET is a floor and cannot prevent this.
+  //     MSO (Must Start On, type=2) pins the start exactly. (Skill: Lesson 3 / Lesson 9)
+  //
+  // Result: needsMSO[tid]  → write ConstraintType=2 (MSO)  + P6 early start
+  //         needsSNET[tid] → write ConstraintType=4 (SNET) + P6 early start
+  const needsMSO  = {};  // tasks with FF or SF predecessors
+  const needsSNET = {};  // tasks with no preds, ALAP, or FS/SS-only that still need anchoring
   tasks.filter(t => t.task_type !== 'TT_WBS').forEach(t => {
     const tid    = t.task_id;
     const tpreds = predsByTask[tid] || [];
-    if (tpreds.length === 0)                                                                        { needsSnetAnchor[tid] = true; return; }
-    if (tpreds.some(p => p.pred_type === 'PR_FF' || p.pred_type === 'PR_SF'))                       { needsSnetAnchor[tid] = true; }
-    if ((t.cstr_type || '') === 'CS_ALAP')                                                          { needsSnetAnchor[tid] = true; }
+    const hasFFSF = tpreds.some(p => p.pred_type === 'PR_FF' || p.pred_type === 'PR_SF');
+
+    if (hasFFSF) {
+      // FF/SF preds: MSO pins the start — prevents MSP FF enforcement cascade.
+      // Also covers ALAP tasks with FF/SF (compound risk).
+      needsMSO[tid] = true;
+    } else if (tpreds.length === 0 || (t.cstr_type || '') === 'CS_ALAP') {
+      // No preds: engine diverges at project anchor date.
+      // ALAP: MSP ALAP produces different date than P6.
+      needsSNET[tid] = true;
+    }
+    // Pure FS/SS networks: no anchor required — engines agree.
   });
 
   const calNameMap = resolveCalendarNames(calIds, calMap);
@@ -961,14 +1116,30 @@ export function convertXERtoMSP(parsedData, origFilename) {
       xml.push('<ActualDuration>PT'    + Math.round(actHrs) + 'H0M0S</ActualDuration>');
       xml.push('<RemainingDuration>PT' + Math.round(remHrs) + 'H0M0S</RemainingDuration>');
 
-      // Constraint mapping
+      // Constraint mapping — selective SNET/MSO anchoring for ASAP/ALAP tasks.
+      //
+      // CSTR_P6_TO_MSP maps hard P6 constraints (MSO, MEO, SNET, etc.) directly.
+      // ASAP and ALAP return -1 — they enter the anchoring logic:
+      //   FF/SF preds → MSO (2): pins start exactly, prevents FF enforcement cascade.
+      //   No preds / ALAP   → SNET (4): floor anchor for engine divergence.
+      //   Pure FS/SS         → no anchor written (engines agree).
       const cstr = (row.cstr_type || '').trim();
       let mspC   = CSTR_P6_TO_MSP[cstr];
       if (mspC === undefined) mspC = -1;
       let cstrDate = '';
       if (mspC === -1) {
-        if (needsSnetAnchor[row.task_id] && startDt) { mspC = 4; cstrDate = formatMSPDate(startDt); snetCount++; }
+        // ASAP or ALAP — apply selective anchor if this task is flagged
+        if (needsMSO[row.task_id] && startDt) {
+          mspC = 2;   // MSO — Must Start On: hard pin for FF/SF cascade prevention
+          cstrDate = formatMSPDate(startDt);
+          snetCount++;
+        } else if (needsSNET[row.task_id] && startDt) {
+          mspC = 4;   // SNET — floor anchor for no-pred / ALAP tasks
+          cstrDate = formatMSPDate(startDt);
+          snetCount++;
+        }
       } else if (mspC > 0) {
+        // Hard P6 constraint — preserve constraint date exactly
         const cd = parseP6Date(row.cstr_date);
         cstrDate = cd ? formatMSPDate(adjustStart(cd)) : (startDt ? formatMSPDate(startDt) : '');
       }
@@ -1107,6 +1278,7 @@ export function convertXERtoMSP(parsedData, origFilename) {
       'Activities converted':       detailCt,
       'WBS bands (summary)':        orderedItems.filter(i => i.type === 'wbs').length,
       'TT_WBS skipped':             skipped.length,
+      'Empty WBS skipped':          emptyWbsSkipped,
       'Calendars':                  calIds.length,
       'Relationships':              predsConverted,
       'Resources':                  rsrcConverted,
@@ -1134,18 +1306,44 @@ export function convertMSPtoXER(parsedData, origFilename) {
   baseCals.forEach(c => { calIdMap[c.uid] = calIdCtr++; });
   const defaultClndrId = baseCals.length ? calIdMap[baseCals[0].uid] : 200;
 
-  // WBS reconstruction from MSP summary tasks
+  // WBS reconstruction from MSP summary tasks.
+  //
+  // WHY wbs_short_name must be a short sequential code, NOT t.name:
+  //   P6 builds the WBS path shown in the Gantt and Activity ID column by
+  //   concatenating wbs_short_name values up the parent chain with dots:
+  //     root.wbs_short_name + '.' + child.wbs_short_name + '.' + ...
+  //   If wbs_short_name = t.name (e.g. 'Town Planning'), P6 produces:
+  //     'Residential House Build.Planning.Town Planning.Planning Applications'
+  //   instead of the expected:
+  //     'RHB.1.1 · Town Planning'
+  //
+  //   Fix: generate sequential integer codes per parent level (1, 2, 3...).
+  //   wbs_name gets the full friendly display name from t.name — unchanged.
+  //   Root node wbs_short_name uses the project short name (e.g. 'RHB').
+  //
+  //   Ref: Lessons Learnt doc — P6 stores two separate fields:
+  //     wbs_short_name → code segment ('1', '1.1') — what P6 concatenates for the ID
+  //     wbs_name       → friendly display name ('Planning', 'Town Planning')
+
   let wbsIdCtr = 100, taskIdCtr = 1000, predIdCtr = 5000;
   const wbsRows = [], wbsByUid = {};
   const rootWbsId = wbsIdCtr++;
+
+  // Root short name: use proj_short_name from MSP <Name> if ≤10 chars and no spaces,
+  // otherwise derive a sanitised uppercase abbreviation (up to 8 chars).
+  const rawProjShort = sanitiseBytesToAscii(projName).replace(/[^A-Za-z0-9]/g, '').substring(0, 8).toUpperCase() || 'PRJ';
   wbsRows.push([rootWbsId, '1', '', '1', '1', 'Y', 'N', '',
-    sanitiseBytesToAscii(projName.substring(0, 40)),
-    sanitiseBytesToAscii(projName),
+    rawProjShort,                          // wbs_short_name — root code segment
+    sanitiseBytesToAscii(projName),        // wbs_name — full project name
     '', '', '0', '0', '0', '0', '0', '', '0', '', '', 'EC_PctComp', 'EE_PF_at_1', generateGuidBase64(), '', '']);
 
   const sorted = allTasks.filter(t => t.uid !== 0).sort((a, b) => a.id - b.id);
   const parentStack = [{ uid: -1, wbsId: rootWbsId, level: 0 }];
   let seqNum = 0;
+
+  // Per-parent child counter — generates sequential short codes (1, 2, 3...)
+  // within each parent WBS node, matching P6's expected code segment format.
+  const childCounters = {};   // parentWbsId → next sequential int
 
   sorted.forEach(t => {
     if (!t.summary) return;
@@ -1154,9 +1352,14 @@ export function convertMSPtoXER(parsedData, origFilename) {
     const wid = wbsIdCtr++;
     wbsByUid[t.uid] = wid;
     seqNum++;
+
+    // Generate sequential short code for this node within its parent
+    childCounters[parentWbsId] = (childCounters[parentWbsId] || 0) + 1;
+    const shortCode = String(childCounters[parentWbsId]);
+
     wbsRows.push([wid, '1', '', String(seqNum), '1', 'N', 'N', '',
-      sanitiseBytesToAscii((t.name || 'WBS').substring(0, 40)),
-      sanitiseBytesToAscii(t.name || 'WBS'),
+      shortCode,                                         // wbs_short_name — sequential code segment
+      sanitiseBytesToAscii(t.name || 'WBS'),             // wbs_name — friendly display name
       '', String(parentWbsId), '0', '0', '0', '0', '0', '', '0', '', '', 'EC_PctComp', 'EE_PF_at_1', generateGuidBase64(), '', '']);
     parentStack.push({ uid: t.uid, wbsId: wid, level: t.outlineLevel });
   });
