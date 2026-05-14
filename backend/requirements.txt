@@ -11,7 +11,7 @@ mpxj>=13.5.0
 jpype1>=1.5.0
 
 # PDF generation (Phase 3)
-# weasyprint>=62.0
+weasyprint>=62.0
 jinja2>=3.0
 httpx>=0.27.0
 
