@@ -39,7 +39,8 @@ from parsers.xer_adapter_mpxj import XERMPXJParserAdapter
 from parsers.mpp_adapter import MPPParserAdapter
 from checks.engine import run_health_check, HealthReport
 import logging
-from api.pdf_export import router as pdf_router
+from api.pdf_export       import router as pdf_router
+from api.helios_endpoint  import router as helios_router
 
 app = FastAPI(
     title="SKOPIA Lens API",
@@ -66,6 +67,7 @@ PARSERS = [
 ]
 # Register PDF export endpoint
 app.include_router(pdf_router)
+app.include_router(helios_router)
 
 
 @app.get("/")
