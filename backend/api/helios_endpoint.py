@@ -45,7 +45,7 @@ router = APIRouter()
 # Local: add ANTHROPIC_API_KEY=sk-ant-... to your .env file in the backend root.
 # Production (Railway): set via Railway dashboard → Variables tab.
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL   = "claude-sonnet-4-20250514"   # Sonnet — fast, cost-efficient
+ANTHROPIC_MODEL   = "claude-sonnet-4-5"   # Sonnet — fast, cost-efficient
 MAX_TOKENS        = 1024                           # Generous for a structured insight response
 
 
