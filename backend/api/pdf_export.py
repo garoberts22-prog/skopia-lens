@@ -187,8 +187,7 @@ def _render_pdf(analysis: dict) -> bytes:
 
     # ── Build template context ────────────────────────────────────────────────
     grade   = str(analysis.get("overall_grade", "?"))
-    raw_score = analysis.get("overall_score")
-    score = round(float(raw_score or 0), 1)
+    score   = round(float(analysis.get("overall_score", 0)), 1)
 
     # Format data_date for display
     raw_dd = analysis.get("data_date") or ""
@@ -228,6 +227,13 @@ def _render_pdf(analysis: dict) -> bytes:
 
         # Schedule data (for project start/finish dates)
         "schedule_data":    analysis.get("schedule_data"),
+
+        # Helios AI insights — included when frontend has generated them
+        # Shape: { health: {content, generatedAt}, baseline: {content, generatedAt} }
+        "helios_insights":  analysis.get("_helios_insights"),
+
+        # Baseline snapshot — included when a baseline was loaded
+        "baseline":         analysis.get("_baseline"),
     }
 
     # ── Render HTML ───────────────────────────────────────────────────────────
