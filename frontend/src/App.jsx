@@ -12,7 +12,8 @@
 //     • Schedule section note: "Reflects current activity listing"
 //   - PdfExportButton unchanged (still in header, opens wizard on click)
 //   - All App shell logic unchanged
-//
+// v0.9.4 chnages:
+//   - Addition of Helios
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState } from 'react'
@@ -23,6 +24,8 @@ import UploadView      from './pages/UploadView'
 import HealthCheckView from './pages/HealthCheckView'
 import ScheduleView    from './pages/ScheduleView'
 import ConvertView     from './pages/ConvertView'
+import HeliosButton    from './components/HeliosButton'
+import HeliosPanel     from './components/HeliosPanel'
 
 // ── Shared style tokens ───────────────────────────────────────────────────────
 const W = {
@@ -60,7 +63,7 @@ const W = {
 // The backend pdf_export.py must inject these into the @page CSS rule.
 //
 // ─────────────────────────────────────────────────────────────────────────────
-function ReportWizard({ analysis, onClose }) {
+function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
   const hasScheduleData = !!(analysis?.schedule_data?.activities?.length)
 
   // ── State ──────────────────────────────────────────────────────────────────
@@ -134,7 +137,29 @@ function ReportWizard({ analysis, onClose }) {
     setLoading(true)
 
     // Build filtered payload — strip data for unchecked sections
-    const payload = { ...analysis }
+        const payload = { ...analysis }
+
+    // Include Helios AI insights in the PDF payload so the template can
+    // render them. Both modes are passed — the template decides what to show.
+    // heliosInsights is read from AnalysisContext via the prop passed to
+    // ReportWizard (see CHANGE 5 below for the prop threading).
+    if (heliosInsightsProp) {
+      payload._helios_insights = heliosInsightsProp
+    }
+
+    // Fix: include baseline data in payload for variance section
+    if (baselineProp) {
+      payload._baseline = {
+        project_name:    baselineProp.project_name,
+        data_date:       baselineProp.data_date,
+        overall_grade:   baselineProp.overall_grade,
+        overall_score:   baselineProp.overall_score,
+        schedule_data:   baselineProp.schedule_data,
+        float_histogram: baselineProp.float_histogram,
+        longest_path:    baselineProp.longest_path,
+        summary_stats:   baselineProp.summary_stats,
+      }
+    }
 
     if (!sections.schedule_data) payload.schedule_data    = null
     if (!sections.longest_path)  payload.longest_path     = []
@@ -537,7 +562,8 @@ function EmptyState({ label, onUpload }) {
 export default function App() {
   const [view,           setView]          = useState('upload')
   const [showWizard,     setShowWizard]    = useState(false)
-  const { analysis } = useAnalysis()
+  const { analysis, baseline, heliosInsights } = useAnalysis()
+  const [showHelios, setShowHelios] = useState(false)
   const hasData = !!analysis
 
   function fmtDataDate(isoStr) {
@@ -601,9 +627,28 @@ export default function App() {
       {showWizard && analysis && (
         <ReportWizard
           analysis={analysis}
+          baselineProp={baseline}
+          heliosInsightsProp={heliosInsights}
           onClose={() => setShowWizard(false)}
         />
       )}
+      {/* ── Helios FAB + Panel ────────────────────────────────────────────── */}
+      <HeliosButton
+        onClick={() => setShowHelios(v => !v)}
+        hasData={hasData}
+        active={showHelios}
+        hasNew={
+          // Show new-insight dot when insights exist but panel is closed
+          !showHelios && (
+            !!(heliosInsights?.health) || !!(heliosInsights?.baseline)
+          )
+        }
+      />
+      <HeliosPanel
+        open={showHelios}
+        onClose={() => setShowHelios(false)}
+      />
+
     </div>
   )
 }

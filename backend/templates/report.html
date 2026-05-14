@@ -1353,5 +1353,107 @@
 
 </div><!-- /analytics section -->
 
+
+{% if helios_insights %}
+
+<!-- ── HELIOS AI INSIGHTS SECTION ──────────────────────────────────────── -->
+<div style="page-break-before: always;"></div>
+
+<div style="padding: 0; font-family: 'Open Sans', Arial, sans-serif;">
+
+  <!-- Section header -->
+  <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
+              padding-bottom: 10px; border-bottom: 2px solid #E2E6F0;">
+    <!-- Helios badge — gradient circle with H -->
+    <div style="width: 28px; height: 28px; border-radius: 50%;
+                background: linear-gradient(135deg, #1EC8D4, #4A6FE8, #2A4DCC);
+                display: flex; align-items: center; justify-content: center;
+                color: white; font-family: 'Montserrat', Arial, sans-serif;
+                font-weight: 900; font-size: 12pt; flex-shrink: 0;">H</div>
+    <div>
+      <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
+                  font-size: 14pt; color: #1A1A2E;">Helios AI Insights</div>
+      <div style="font-size: 7pt; color: #6B7280;">
+        AI-generated schedule analysis · SKOPIA Lens
+      </div>
+    </div>
+  </div>
+
+  <!-- Health Insights block -->
+  {% if helios_insights.health %}
+  <div style="margin-bottom: 20px; background: #F7F8FC; border: 1px solid #E2E6F0;
+              border-left: 4px solid #1EC8D4; border-radius: 6px; padding: 14px 16px;">
+    <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
+                font-size: 9.5pt; color: #1EC8D4; text-transform: uppercase;
+                letter-spacing: 0.06em; margin-bottom: 10px;">Health Insights</div>
+
+    {% set lines = helios_insights.health.content.split('\n') %}
+    {% for line in lines %}
+      {% if line.strip() == '' %}
+        <div style="height: 6px;"></div>
+      {% elif line.strip().startswith('**') and line.strip().endswith('**') %}
+        <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
+                    font-size: 9pt; color: #1A1A2E; margin-top: 10px; margin-bottom: 3px;">
+          {{ line.strip().replace('**', '') }}
+        </div>
+      {% else %}
+        <div style="font-size: 8.5pt; color: #374151; line-height: 1.65; margin-bottom: 2px;">
+          {{ line }}
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #E2E6F0;
+                font-size: 6.5pt; color: #9CA3AF; font-family: 'JetBrains Mono', monospace;">
+      Generated {{ helios_insights.health.generatedAt[:16] | replace('T', ' ') }} ·
+      Helios AI · SKOPIA Lens
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Baseline Variance block -->
+  {% if helios_insights.baseline %}
+  <div style="margin-bottom: 20px; background: #F7F8FC; border: 1px solid #E2E6F0;
+              border-left: 4px solid #4A6FE8; border-radius: 6px; padding: 14px 16px;">
+    <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
+                font-size: 9.5pt; color: #4A6FE8; text-transform: uppercase;
+                letter-spacing: 0.06em; margin-bottom: 10px;">Baseline Variance Analysis</div>
+
+    {% set lines = helios_insights.baseline.content.split('\n') %}
+    {% for line in lines %}
+      {% if line.strip() == '' %}
+        <div style="height: 6px;"></div>
+      {% elif line.strip().startswith('**') and line.strip().endswith('**') %}
+        <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
+                    font-size: 9pt; color: #1A1A2E; margin-top: 10px; margin-bottom: 3px;">
+          {{ line.strip().replace('**', '') }}
+        </div>
+      {% else %}
+        <div style="font-size: 8.5pt; color: #374151; line-height: 1.65; margin-bottom: 2px;">
+          {{ line }}
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #E2E6F0;
+                font-size: 6.5pt; color: #9CA3AF; font-family: 'JetBrains Mono', monospace;">
+      Generated {{ helios_insights.baseline.generatedAt[:16] | replace('T', ' ') }} ·
+      Helios AI · SKOPIA Lens
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Disclaimer -->
+  <div style="font-size: 6.5pt; color: #9CA3AF; font-family: 'Open Sans', Arial, sans-serif;
+              border-top: 1px solid #E2E6F0; padding-top: 8px; line-height: 1.5;">
+    AI-generated insights are based on schedule data only. Always verify findings
+    against the source schedule before making project decisions.
+    Helios · SKOPIA Lens · {{ generated_at }}
+  </div>
+
+</div>
+{% endif %}
+
+
 </body>
 </html>

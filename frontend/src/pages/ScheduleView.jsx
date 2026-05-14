@@ -1603,25 +1603,33 @@ function RelPanel({ selectedAct, relationships, activities, onGoTo, onToggle, is
     <div style={{flexShrink:0,background:SK.card,display:'flex',flexDirection:'column',overflow:'hidden',borderTop:`2px solid ${SK.border}`}}>
       {/* Header — always visible regardless of open state */}
       <div style={{background:SK.header,padding:'5px 12px',display:'flex',alignItems:'center',gap:10,flexShrink:0,
+        position:'relative',
         cursor: isOpen ? 'ns-resize' : 'default', userSelect:'none'}}
         onMouseDown={isOpen ? onDragStart : undefined}>
+        {/* Left side — label + selected activity info */}
         <span style={{fontFamily:'var(--font-head)',fontWeight:700,fontSize:tableFontSize,color:SK.cyan,textTransform:'uppercase',letterSpacing:'0.06em'}}>Relationships</span>
         {selectedAct&&<>
           <span style={{color:'rgba(255,255,255,0.3)',fontSize:tableFontSize}}>|</span>
           <span style={{fontFamily:'var(--font-mono)',fontSize:tableFontSize,color:'rgba(255,255,255,0.7)'}}>{selectedAct.id}</span>
           <span style={{fontFamily:'var(--font-body)',fontSize:tableFontSize,color:'rgba(255,255,255,0.5)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{selectedAct.name}</span>
         </>}
+        {/* Spacer pushes chevron to horizontal centre */}
         <div style={{flex:1}}/>
-        {/* Chevron toggle — ▲ when closed (click to open), ▼ when open (click to close) */}
+        {/* Chevron toggle — centred in the header band */}
         <button
           onClick={onToggle}
           title={isOpen ? 'Close relationships' : 'Open relationships'}
-          style={{background:'none',border:'none',cursor:'pointer',padding:'2px 6px',lineHeight:1,
-            color:'rgba(255,255,255,0.6)',fontSize:16,transition:'color 0.15s'}}
+          style={{
+            position:'absolute', left:'50%', transform:'translateX(-50%)',
+            background:'none',border:'none',cursor:'pointer',padding:'2px 16px',lineHeight:1,
+            color:'rgba(255,255,255,0.6)',fontSize:16,transition:'color 0.15s',
+          }}
           onMouseEnter={e=>e.currentTarget.style.color='#fff'}
           onMouseLeave={e=>e.currentTarget.style.color='rgba(255,255,255,0.6)'}>
           {isOpen ? '▼' : '▲'}
         </button>
+        {/* Right spacer — mirrors left content width so chevron stays truly centred */}
+        <div style={{flex:1}}/>
       </div>
       {/* Gradient accent strip */}
       <div style={{height:2,background:SK.grad,flexShrink:0}}/>
