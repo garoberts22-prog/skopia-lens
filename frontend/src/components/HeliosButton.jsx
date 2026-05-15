@@ -141,217 +141,26 @@ export default function HeliosButton({
             />
           )}
 
-          {/* Helios Orb */}
-          <svg
+          {/* Helios Orb Asset */}
+          <img
             className="helios-sphere"
-            width="76"
-            height="76"
-            viewBox="0 0 76 76"
+            src={active ? '/assets/helios-static.png' : '/assets/helios-static.png'}
+            alt="Helios"
+            draggable={false}
             style={{
+              width: '76px',
+              height: '76px',
+              objectFit: 'contain',
               animation: 'helios-bob 3s ease-in-out infinite',
               transition: 'all 0.22s ease',
               opacity: hasData ? 1 : 0.55,
               filter: active
                 ? 'drop-shadow(0 0 18px rgba(75,120,255,0.55)) drop-shadow(0 12px 28px rgba(0,0,0,0.42))'
                 : 'drop-shadow(0 12px 22px rgba(0,0,0,0.34))',
+              pointerEvents: 'none',
+            userSelect: 'none',
             }}
-          >
-            <defs>
-              {/* Main Orb Gradient */}
-              <radialGradient id="helios-core" cx="35%" cy="18%" r="72%">
-                <stop offset="0%" stopColor="#DDFBFF" />
-                <stop offset="22%" stopColor="#6BE8FF" />
-                <stop offset="58%" stopColor="#2875FF" />
-                <stop offset="100%" stopColor="#4129E8" />
-              </radialGradient>
-
-              {/* Cyan Wave */}
-              <linearGradient id="wave-cyan" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#A8FFFF" stopOpacity="0.95" />
-                <stop offset="100%" stopColor="#17B6FF" stopOpacity="0.72" />
-              </linearGradient>
-
-              {/* Purple Wave */}
-              <linearGradient id="wave-purple" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#C9C4FF" stopOpacity="0.82" />
-                <stop offset="100%" stopColor="#9652FF" stopOpacity="0.72" />
-              </linearGradient>
-
-              {/* Glass Shine */}
-              <radialGradient id="shine-top" cx="30%" cy="16%" r="50%">
-                <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.92" />
-                <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
-              </radialGradient>
-
-              <clipPath id="heliosClip">
-                <circle cx="38" cy="38" r="35" />
-              </clipPath>
-            </defs>
-
-            {/* Base Orb */}
-            <circle cx="38" cy="38" r="35" fill="url(#helios-core)" />
-
-            {/* Layered Bands */}
-            <g clipPath="url(#heliosClip)">
-              {/* Top Cyan */}
-              <path
-                d="M-8 18 C16 8, 38 8, 86 22 L86 34 C54 28, 24 28, -8 32 Z"
-                fill="url(#wave-cyan)"
-                opacity="0.9"
-              />
-
-              {/* Purple Middle */}
-              <path
-                d="M-8 31 C18 24, 42 24, 86 32 L86 52 C56 46, 24 46, -8 50 Z"
-                fill="url(#wave-purple)"
-                opacity="0.92"
-              />
-
-              {/* Bottom Cyan */}
-              <path
-                d="M-8 52 C18 42, 42 44, 86 58 L86 86 L-8 86 Z"
-                fill="url(#wave-cyan)"
-                opacity="0.72"
-              />
-
-              {/* Large Gloss Reflection */}
-              <ellipse
-                cx="58"
-                cy="24"
-                rx="12"
-                ry="22"
-                fill="#FFFFFF"
-                opacity="0.14"
-              />
-
-              {/* Secondary Reflection */}
-              <ellipse
-                cx="20"
-                cy="58"
-                rx="18"
-                ry="8"
-                fill="#8FFFFF"
-                opacity="0.08"
-              />
-            </g>
-
-            {/* Top Shine */}
-            <circle cx="38" cy="38" r="35" fill="url(#shine-top)" />
-
-            {/* Left Eye */}
-            <g>
-              {/* White Eye Base */}
-              <ellipse cx="26" cy="34" rx="9" ry="10.5" fill="#FFFFFF" />
-
-              {/* Iris */}
-              <ellipse cx="27" cy="35" rx="6.2" ry="7.4" fill="#1841FF" />
-
-              {/* Cyan Inner */}
-              <ellipse cx="28" cy="38" rx="3.8" ry="4.6" fill="#32F2FF" />
-
-              {/* Highlights */}
-              <ellipse
-                cx="24"
-                cy="31"
-                rx="3.2"
-                ry="4.1"
-                fill="#FFFFFF"
-              />
-
-              <circle
-                cx="30"
-                cy="39"
-                r="1.5"
-                fill="#FFFFFF"
-                opacity="0.95"
-              />
-            </g>
-
-            {/* Right Eye */}
-            <g>
-              {/* White Eye Base */}
-              <ellipse cx="50" cy="34" rx="9" ry="10.5" fill="#FFFFFF" />
-
-              {/* Iris */}
-              <ellipse cx="51" cy="35" rx="6.2" ry="7.4" fill="#1841FF" />
-
-              {/* Cyan Inner */}
-              <ellipse cx="52" cy="38" rx="3.8" ry="4.6" fill="#32F2FF" />
-
-              {/* Highlights */}
-              <ellipse
-                cx="48"
-                cy="31"
-                rx="3.2"
-                ry="4.1"
-                fill="#FFFFFF"
-              />
-
-              <circle
-                cx="54"
-                cy="39"
-                r="1.5"
-                fill="#FFFFFF"
-                opacity="0.95"
-              />
-            </g>
-
-            {/* Pink Cheeks */}
-            <ellipse
-              cx="17"
-              cy="44"
-              rx="4"
-              ry="2.4"
-              fill="#FFD7FF"
-              opacity="0.72"
-            />
-
-            <ellipse
-              cx="59"
-              cy="44"
-              rx="4"
-              ry="2.4"
-              fill="#FFD7FF"
-              opacity="0.72"
-            />
-
-            {/* Smile Cut-Out Shadow */}
-            <path
-              d="M25 46 Q38 60 51 47"
-              fill="none"
-              stroke="rgba(0,0,0,0.22)"
-              strokeWidth="4"
-              strokeLinecap="round"
-            />
-
-            {/* Main White Smile */}
-            <path
-              d="M25 46 Q38 58 51 46"
-              fill="none"
-              stroke="#FFFFFF"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-
-            {/* Smile Highlight */}
-            <path
-              d="M26 45 Q38 56 50 45"
-              fill="none"
-              stroke="rgba(255,255,255,0.6)"
-              strokeWidth="1"
-              strokeLinecap="round"
-            />
-
-            {/* Outer Glass Ring */}
-            <circle
-              cx="38"
-              cy="38"
-              r="35"
-              fill="none"
-              stroke="rgba(255,255,255,0.22)"
-              strokeWidth="1.2"
-            />
-          </svg>
+          />
         </div>
       </div>
     </>

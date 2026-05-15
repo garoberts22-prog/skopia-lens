@@ -1,123 +1,130 @@
 // ── HeliosPanel.jsx ───────────────────────────────────────────────────────────
 //
-// v1.1 — Added Forensic Analysis tab (third mode).
+// v1.3 — Layout: centred landscape modal (75vw × auto, max 860px wide).
+//         "What Helios can do" tiles are now selectable — clicking one
+//         switches the active tab and shows the correct prompt.
 //
-// LAYOUT:
-//   Fixed panel, right edge of viewport, full height.
-//   Slides in from right on open. Dark theme (#1E1E1E background).
-//   Three tab modes: Health Insights | Baseline Variance | Forensic Analysis.
-//   Baseline tab greyed out with prompt when no baseline is loaded.
-//   Forensic tab operates on current schedule only — no baseline required.
-//
-// DATA FLOW:
-//   Reads analysis + baseline + heliosInsights from AnalysisContext.
-//   On "Generate", POSTs to /api/helios and stores the result in context
-//   via setHeliosInsights — persists across navigation and feeds PDF export.
+// CHANGES FROM v1.2:
+//   - Panel is now a centred landscape modal (fixed, centred, up to 75vw wide)
+//     rather than a right-edge slide-in. Animates scale+fade in/out.
+//   - Left column (300px): prompt line, loading, error, PDF notice.
+//   - Right column (flex:1): insight content card OR feature tiles.
+//   - Feature tiles are now <button> elements. Clicking one:
+//       1. Switches activeTab to that mode (if not locked)
+//       2. Updates the terminal prompt line in the left column
+//       3. Active tile gets accent border + tinted background
+//   - All API logic, context hooks, and props preserved exactly from v1.2.
 //
 // PROPS:
-//   open      bool    — controls slide-in/out
-//   onClose   fn      — called when × is clicked or backdrop is clicked
+//   open      bool    — controls show/hide
+//   onClose   fn      — called when × or backdrop clicked
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState } from 'react'
 import { useAnalysis } from '../context/AnalysisContext'
 
-// ── Colour tokens — dark theme for the panel ─────────────────────────────────
+// ── Colour tokens ─────────────────────────────────────────────────────────────
 const P = {
-  bg:       '#1E1E1E',          // charcoal — matches app header
-  surface:  '#262637',          // slightly lighter card surface
-  border:   'rgba(74,111,232,0.25)',
-  text:     '#E2E8F0',
-  muted:    '#64748B',
-  cyan:     '#1EC8D4',
-  peri:     '#4A6FE8',
-  grad:     'linear-gradient(135deg,#1EC8D4,#4A6FE8,#2A4DCC)',
-  pass:     '#16A34A',
-  warn:     '#D97706',
-  fail:     '#DC2626',
-  // Forensic accent — red/amber signal for risk-focused mode
-  forensic: '#DC2626',
+  bg:           '#0A0B1A',
+  surface:      '#0F1029',
+  surfaceHigh:  '#141530',
+  surfaceActive:'#1A1D40',           // selected feature tile background
+  border:       'rgba(74,111,232,0.2)',
+  borderSubtle: 'rgba(255,255,255,0.06)',
+  text:         '#CBD5E1',
+  textBright:   '#E2E8F0',
+  muted:        '#475569',
+  mutedMid:     '#64748B',
+  cyan:         '#1EC8D4',
+  cyanDim:      'rgba(30,200,212,0.15)',
+  peri:         '#4A6FE8',
+  grad:         'linear-gradient(135deg,#1EC8D4,#4A6FE8,#2A4DCC)',
+  pass:         '#16A34A',
+  warn:         '#D97706',
+  fail:         '#DC2626',
+  forensic:     '#DC2626',
+  online:       '#22C55E',
 }
 
-// ── API call helper ────────────────────────────────────────────────────────────
+// ── API call helper ───────────────────────────────────────────────────────────
 async function callHelios(mode, analysis, baseline) {
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
   const resp = await fetch(`${API_BASE}/api/helios`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ mode, analysis, baseline: baseline ?? null }),
   })
-
   const body = await resp.json()
-
   if (!resp.ok) {
-    throw new Error(
-      body?.detail?.message ||
-      body?.detail ||
-      `HTTP ${resp.status}`
-    )
+    throw new Error(body?.detail?.message || body?.detail || `HTTP ${resp.status}`)
   }
-
   return body   // { mode, content, generated_at }
 }
 
+// ── Activity ID chip renderer ─────────────────────────────────────────────────
+const ACTIVITY_ID_PATTERN = /\b([A-Z]{1,5}[\d]{3,}|[A-Z]{2,}(?:\.[A-Z0-9]+){2,})\b/g
+
+function renderTextWithChips(text) {
+  const parts = []
+  let lastIndex = 0
+  let match
+  ACTIVITY_ID_PATTERN.lastIndex = 0
+  while ((match = ACTIVITY_ID_PATTERN.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push({ type: 'text', value: text.slice(lastIndex, match.index) })
+    parts.push({ type: 'chip', value: match[0] })
+    lastIndex = ACTIVITY_ID_PATTERN.lastIndex
+  }
+  if (lastIndex < text.length) parts.push({ type: 'text', value: text.slice(lastIndex) })
+
+  return parts.map((part, i) => {
+    if (part.type === 'chip') {
+      return (
+        <code key={i} style={{
+          fontFamily: 'var(--font-mono)', fontSize: 11, background: P.cyanDim, color: P.cyan,
+          border: `1px solid rgba(30,200,212,0.3)`, borderRadius: 3, padding: '0px 5px',
+          letterSpacing: '0.02em', verticalAlign: 'baseline', display: 'inline', whiteSpace: 'nowrap',
+        }}>
+          {part.value}
+        </code>
+      )
+    }
+    return <span key={i}>{part.value}</span>
+  })
+}
+
 // ── Insight content renderer ──────────────────────────────────────────────────
-// Renders the plain-text response from Helios with basic formatting:
-//   **Bold heading** → styled heading (colour varies by mode)
-//   Numbered lists (1. 2. 3.) → preserved
-//   Blank lines → paragraph breaks
 function InsightContent({ content, mode }) {
   if (!content) return null
-
-  // Heading colour: forensic uses red/amber to signal risk tone
   const headingColour = mode === 'forensic' ? P.warn : P.cyan
-
   const lines = content.split('\n')
-
   return (
-    <div style={{
-      fontFamily: 'var(--font-body)',
-      fontSize:   13,
-      color:      P.text,
-      lineHeight: 1.7,
-    }}>
+    <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: P.text, lineHeight: 1.75 }}>
       {lines.map((line, i) => {
-        // Empty line → spacer
-        if (!line.trim()) {
-          return <div key={i} style={{ height: 8 }} />
-        }
-
-        // Bold heading (whole line wrapped in **...**)
+        if (!line.trim()) return <div key={i} style={{ height: 10 }} />
         if (/^\*\*(.+)\*\*$/.test(line.trim())) {
-          const heading = line.trim().replace(/\*\*/g, '')
           return (
             <div key={i} style={{
-              fontFamily:   'var(--font-head)',
-              fontWeight:   700,
-              fontSize:     12,
-              color:        headingColour,
-              marginTop:    12,
-              marginBottom: 4,
-              letterSpacing: '0.02em',
+              fontFamily: 'var(--font-mono)', fontWeight: 500, fontSize: 10, color: headingColour,
+              marginTop: 16, marginBottom: 5, letterSpacing: '0.08em', textTransform: 'uppercase',
             }}>
-              {heading}
+              {line.trim().replace(/\*\*/g, '')}
             </div>
           )
         }
-
-        // Inline bold within a line — replace **x** with <strong>
         const parts = line.split(/(\*\*[^*]+\*\*)/)
         return (
-          <div key={i} style={{ marginBottom: 2 }}>
-            {parts.map((part, j) =>
-              /^\*\*(.+)\*\*$/.test(part)
-                ? <strong key={j} style={{ color: P.text, fontWeight: 600 }}>
-                    {part.replace(/\*\*/g, '')}
+          <div key={i} style={{ marginBottom: 3 }}>
+            {parts.map((part, j) => {
+              if (/^\*\*(.+)\*\*$/.test(part)) {
+                return (
+                  <strong key={j} style={{ color: P.textBright, fontWeight: 600 }}>
+                    {renderTextWithChips(part.replace(/\*\*/g, ''))}
                   </strong>
-                : <span key={j}>{part}</span>
-            )}
+                )
+              }
+              return <span key={j}>{renderTextWithChips(part)}</span>
+            })}
           </div>
         )
       })}
@@ -125,67 +132,184 @@ function InsightContent({ content, mode }) {
   )
 }
 
-// ── Timestamp display ─────────────────────────────────────────────────────────
+// ── Typewriter loader ─────────────────────────────────────────────────────────
+function AnalysingLabel({ mode }) {
+  const label = mode === 'forensic' ? 'auditing' : 'analysing'
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-mono)', fontSize: 12, color: P.mutedMid }}>
+      <span style={{
+        display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+        background: P.cyan, animation: 'helios-pulse 1.2s ease-in-out infinite', flexShrink: 0,
+      }} />
+      <span>
+        SKOPIA · {label}
+        <span className="helios-dots" aria-hidden="true">
+          <span style={{ animationDelay: '0ms' }}>.</span>
+          <span style={{ animationDelay: '200ms' }}>.</span>
+          <span style={{ animationDelay: '400ms' }}>.</span>
+        </span>
+      </span>
+    </div>
+  )
+}
+
+// ── Timestamp ─────────────────────────────────────────────────────────────────
 function GeneratedAt({ isoStr }) {
   if (!isoStr) return null
   try {
     const d = new Date(isoStr)
-    const fmt = d.toLocaleString('en-AU', {
-      day: '2-digit', month: 'short', year: 'numeric',
-      hour: '2-digit', minute: '2-digit',
-    })
+    const fmt = d.toLocaleString('en-AU', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     return (
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: P.muted, marginBottom: 12 }}>
-        Generated {fmt}
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: P.muted, marginBottom: 12, letterSpacing: '0.04em' }}>
+        ── generated {fmt} ──
       </div>
     )
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
-// ── Tab configuration ─────────────────────────────────────────────────────────
-// Centralised so tab rendering loop stays clean.
-// locked: fn(hasBaseline) → bool — lets each tab define its own lock logic.
+// ── Tab / mode configuration ──────────────────────────────────────────────────
+// accentColour and iconGrad added to drive consistent theming per mode
+// across both the tab bar and the feature tiles.
 const TABS = [
   {
-    id:     'health',
-    label:  'Health Insights',
-    icon:   '◈',
-    // Health tab: never locked — only needs current schedule
-    locked: () => false,
-    lockLabel: null,
-    // Description shown in the mode chip when this tab is active
-    description: (hasBaseline) =>
-      '◈  Helios will rank the top schedule risks from your health check data, float distribution, and critical path.',
+    id:           'health',
+    label:        'Health Insights',
+    icon:         '◈',
+    locked:       () => false,
+    lockLabel:    null,
+    prompt:       'Rank top schedule risks from health check data, float distribution, and critical path.',
+    featureDesc:  'AI ranks risks across constraints, float, logic and pulls the top 5 to act on.',
+    iconGrad:     'linear-gradient(135deg,#1EC8D4,#4A6FE8,#2A4DCC)',
+    accentColour: '#1EC8D4',
   },
   {
-    id:     'baseline',
-    label:  'Baseline Variance',
-    icon:   '⇄',
-    // Baseline tab: locked when no baseline is loaded
-    locked: (hasBaseline) => !hasBaseline,
-    lockLabel: 'no baseline',
-    description: (hasBaseline) =>
-      '⇄  Helios will compare your current schedule against the baseline — finish date movement, float erosion, and critical path changes.',
+    id:           'baseline',
+    label:        'Baseline Variance',
+    icon:         '⇄',
+    locked:       (hasBaseline) => !hasBaseline,
+    lockLabel:    'no baseline',
+    prompt:       'Compare current schedule against baseline — finish date movement, float erosion, and critical path changes.',
+    featureDesc:  'Auto-drafted variance analysis with logic, float impact, and supporting evidence.',
+    iconGrad:     'linear-gradient(135deg,#4A6FE8,#2A4DCC)',
+    accentColour: '#4A6FE8',
   },
   {
-    id:     'forensic',
-    label:  'Forensic Analysis',
-    icon:   '⚑',
-    // Forensic tab: never locked — operates on current schedule only
-    locked: () => false,
-    lockLabel: null,
-    description: (hasBaseline) =>
-      '⚑  Helios will conduct a forensic examination of your schedule — float distribution, near-critical path exposure, ranked risks, and actionable recommendations. Modelled on EPC/EPCM forensic planning standards.',
+    id:           'forensic',
+    label:        'Forensic Analysis',
+    icon:         '⚑',
+    locked:       () => false,
+    lockLabel:    null,
+    prompt:       'Forensic examination — float distribution, near-critical exposure, ranked risks, and actionable recommendations. Modelled on EPC/EPCM standards.',
+    featureDesc:  'Structured forensic examination modelled on EPC/EPCM planning standards.',
+    iconGrad:     'linear-gradient(135deg,#DC2626,#D97706)',
+    accentColour: '#DC2626',
   },
 ]
+
+// ── Feature tile (selectable) ─────────────────────────────────────────────────
+// Clicking a tile switches the activeTab. Locked tiles are disabled.
+// Active tile: accent left border + tinted background + accent dot on label.
+function FeatureTile({ tab, isActive, isLocked, onClick }) {
+  return (
+    <button
+      className="helios-feature-tile"
+      onClick={() => !isLocked && onClick(tab.id)}
+      disabled={isLocked}
+      title={isLocked ? 'Upload a baseline schedule to enable this mode' : `Switch to ${tab.label}`}
+      style={{
+        display:      'flex',
+        alignItems:   'flex-start',
+        gap:          14,
+        padding:      '13px 16px',
+        width:        '100%',
+        textAlign:    'left',
+        background:   isActive ? P.surfaceActive : P.surfaceHigh,
+        border:       `1px solid ${isActive ? tab.accentColour + '55' : P.borderSubtle}`,
+        borderLeft:   isActive ? `3px solid ${tab.accentColour}` : `3px solid transparent`,
+        borderRadius: 6,
+        cursor:       isLocked ? 'not-allowed' : 'pointer',
+        opacity:      isLocked ? 0.45 : 1,
+        transition:   'background 0.15s, border-color 0.15s',
+        outline:      'none',
+        fontFamily:   'inherit',
+      }}
+    >
+      {/* Square gradient icon tile */}
+      <div style={{
+        width: 34, height: 34, borderRadius: 5,
+        background: tab.iconGrad,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 15, flexShrink: 0, color: '#fff',
+        boxShadow: isActive ? `0 2px 12px ${tab.accentColour}44` : 'none',
+        transition: 'box-shadow 0.15s',
+      }}>
+        {tab.icon}
+      </div>
+
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Mode label + active dot */}
+        <div style={{
+          fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 13,
+          color: isActive ? tab.accentColour : P.textBright,
+          marginBottom: 4, display: 'flex', alignItems: 'center', gap: 7,
+        }}>
+          {tab.label}
+          {/* Small dot indicates the currently selected mode */}
+          {isActive && (
+            <span style={{
+              display: 'inline-block', width: 5, height: 5,
+              borderRadius: '50%', background: tab.accentColour, flexShrink: 0,
+            }} />
+          )}
+          {/* Lock badge */}
+          {isLocked && (
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 8,
+              background: 'rgba(255,255,255,0.06)', borderRadius: 2,
+              padding: '1px 5px', color: P.muted, letterSpacing: '0.04em',
+            }}>
+              no baseline
+            </span>
+          )}
+        </div>
+        {/* Description */}
+        <div style={{
+          fontFamily: 'var(--font-body)', fontSize: 12,
+          color: isActive ? P.text : P.mutedMid, lineHeight: 1.55,
+        }}>
+          {tab.featureDesc}
+        </div>
+      </div>
+    </button>
+  )
+}
+
+// ── Helios avatar SVG ─────────────────────────────────────────────────────────
+// Extracted to keep the main render tidy. IDs use unique prefix (hv13-)
+// to avoid conflicts if multiple SVG instances exist on the page.
+function HeliosAvatar({ size = 36 }) {
+  return (
+    <img
+      src="/assets/helios-static.png"
+      alt="Helios"
+      draggable={false}
+      style={{
+        width: size,
+        height: size,
+        objectFit: 'contain',
+        flexShrink: 0,
+        userSelect: 'none',
+        pointerEvents: 'none',
+        filter: 'drop-shadow(0 3px 8px rgba(0,0,0,0.4))',
+      }}
+    />
+  )
+}
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 export default function HeliosPanel({ open, onClose }) {
   const { analysis, baseline, heliosInsights, setHeliosInsights } = useAnalysis()
 
-  // 'health' | 'baseline' | 'forensic'
   const [activeTab, setActiveTab] = useState('health')
   const [loading,   setLoading]   = useState(false)
   const [error,     setError]     = useState(null)
@@ -195,25 +319,17 @@ export default function HeliosPanel({ open, onClose }) {
   const baselineInsight = heliosInsights?.baseline ?? null
   const forensicInsight = heliosInsights?.forensic ?? null
 
-  // ── Generate handler ────────────────────────────────────────────────────────
+  // ── Generate handler — preserved exactly from v1.1/v1.2 ───────────────────
   async function handleGenerate() {
     if (!analysis) return
-    // Baseline mode requires baseline — guard here (button should also be hidden)
     if (activeTab === 'baseline' && !hasBaseline) return
-
     setError(null)
     setLoading(true)
-
     try {
       const result = await callHelios(activeTab, analysis, baseline)
-
-      // Store in context keyed by mode — persists across navigation, feeds PDF export
       setHeliosInsights(prev => ({
         ...prev,
-        [activeTab]: {
-          content:     result.content,
-          generatedAt: result.generated_at,
-        },
+        [activeTab]: { content: result.content, generatedAt: result.generated_at },
       }))
     } catch (err) {
       setError(err.message || 'Helios encountered an error. Please try again.')
@@ -222,231 +338,193 @@ export default function HeliosPanel({ open, onClose }) {
     }
   }
 
-  // ── Derive active tab's stored insight and generate availability ─────────
-  const currentInsight = {
-    health:   healthInsight,
-    baseline: baselineInsight,
-    forensic: forensicInsight,
-  }[activeTab]
+  // ── Derived state ───────────────────────────────────────────────────────────
+  const currentInsight = { health: healthInsight, baseline: baselineInsight, forensic: forensicInsight }[activeTab]
+  const activeTabDef   = TABS.find(t => t.id === activeTab)
+  const tabIsLocked    = activeTabDef?.locked(hasBaseline) ?? false
+  const canGenerate    = !!analysis && !tabIsLocked
 
-  // Tab is "generatable" if: analysis loaded AND mode-specific requirements met
-  const activeTabDef = TABS.find(t => t.id === activeTab)
-  const tabIsLocked  = activeTabDef?.locked(hasBaseline) ?? false
-  const canGenerate  = !!analysis && !tabIsLocked
+  const projectName = analysis?.project_name ?? null
+  const statusDot   = loading ? P.cyan : P.online
+  const statusLabel = loading ? 'generating' : 'online'
 
-  // ── Mode chip description ────────────────────────────────────────────────
-  // Show description chip when analysis loaded and this tab can generate.
-  // Forensic chip uses a muted red background to signal its risk tone.
-  const showDescChip = !!analysis && !tabIsLocked
-  const chipStyle    = activeTab === 'forensic'
-    ? {
-        background: 'rgba(220,38,38,0.07)',
-        border:     '1px solid rgba(220,38,38,0.2)',
-        color:      '#FCA5A5',
-      }
-    : {
-        background: 'rgba(30,200,212,0.07)',
-        border:     '1px solid rgba(30,200,212,0.2)',
-        color:      '#94DCDF',
-      }
+  const buttonLabel = loading ? null
+    : currentInsight
+      ? (activeTab === 'forensic' ? '↺  Re-run Audit'  : '↺  Rerun')
+      : (activeTab === 'forensic' ? '▶  Run Audit'      : '▶  Run Analysis')
+
+  // Feature tiles show when: analysis loaded, no insight for this tab, not loading, tab not locked
+  const showFeatureTiles = !!analysis && !currentInsight && !loading && !tabIsLocked
+
+  // Tile click — switches the active tab (lock enforcement in FeatureTile)
+  function handleTileSelect(tabId) {
+    setActiveTab(tabId)
+  }
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <>
+      {/* ── Component-scoped styles ──────────────────────────────────────── */}
       <style>{`
-        @keyframes helios-panel-slide {
-          from { transform: translateX(100%); opacity: 0; }
-          to   { transform: translateX(0);    opacity: 1; }
+        @keyframes helios-modal-in {
+          from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+          to   { opacity: 1; transform: translate(-50%, -50%) scale(1);    }
         }
-        @keyframes helios-spin {
-          to { transform: rotate(360deg); }
+        .helios-dots span {
+          opacity: 0;
+          animation: helios-dot-appear 1.2s ease-in-out infinite;
         }
+        @keyframes helios-dot-appear {
+          0%, 60%, 100% { opacity: 0; }
+          20%, 40%      { opacity: 1; }
+        }
+        @keyframes helios-pulse {
+          0%, 100% { opacity: 1;   transform: scale(1);    }
+          50%      { opacity: 0.4; transform: scale(0.75); }
+        }
+        @keyframes helios-fadein {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0);   }
+        }
+        .helios-insight-card { animation: helios-fadein 0.25s ease-out; }
+        .helios-tab:hover:not([data-locked="true"]) {
+          background: rgba(255,255,255,0.04) !important;
+        }
+        /* Feature tile hover — not when locked or active */
+        .helios-feature-tile:not(:disabled):hover {
+          background: #1C2045 !important;
+        }
+        .helios-scroll::-webkit-scrollbar { width: 4px; }
+        .helios-scroll::-webkit-scrollbar-track { background: transparent; }
+        .helios-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+        .helios-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
       `}</style>
 
-      {/* ── Backdrop (click to close) ──────────────────────────────────── */}
+      {/* ── Backdrop ─────────────────────────────────────────────────────── */}
       {open && (
-        <div
-          onClick={onClose}
-          style={{
-            position:   'fixed',
-            inset:      0,
-            zIndex:     799,
-            background: 'rgba(0,0,0,0.25)',
-          }}
-        />
+        <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 799, background: 'rgba(0,0,0,0.55)' }} />
       )}
 
-      {/* ── Panel ─────────────────────────────────────────────────────── */}
+      {/* ── Centred landscape modal ───────────────────────────────────────── */}
+      {/*
+        Positioned at 50%/50% with translate(-50%,-50%) — centred on screen.
+        Width: min(75vw, 860px). Height: auto up to 82vh.
+        Stays in DOM when closed (opacity+pointer-events) to preserve state.
+        Scale+fade entrance animation.
+      */}
       <div style={{
-        position:   'fixed',
-        top:        0,
-        right:      0,
-        bottom:     0,
-        width:      380,
-        zIndex:     800,
-        background: P.bg,
-        borderLeft: `1px solid ${P.border}`,
-        display:    'flex',
+        position:      'fixed',
+        top:           '50%',
+        left:          '50%',
+        transform:     'translate(-50%, -50%)',
+        zIndex:        800,
+        width:         'min(75vw, 860px)',
+        maxHeight:     '82vh',
+        background:    P.bg,
+        border:        `1px solid ${P.border}`,
+        borderRadius:  10,
+        display:       'flex',
         flexDirection: 'column',
-        boxShadow:  '-8px 0 32px rgba(0,0,0,0.4)',
-        transform:  open ? 'translateX(0)' : 'translateX(100%)',
-        transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)',
-        // Panel stays in DOM (just off-screen) so state persists on close
+        boxShadow:     '0 24px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(74,111,232,0.12)',
+        opacity:        open ? 1 : 0,
+        pointerEvents:  open ? 'auto' : 'none',
+        animation:      open ? 'helios-modal-in 0.22s cubic-bezier(0.4,0,0.2,1) forwards' : 'none',
+        transition:     'opacity 0.18s ease',
       }}>
 
-        {/* ── Gradient accent strip ──────────────────────────────────────── */}
-        <div style={{ height: 3, background: P.grad, flexShrink: 0 }} />
+        {/* ── Top gradient strip ────────────────────────────────────────── */}
+        <div style={{ height: 3, background: P.grad, flexShrink: 0, borderRadius: '10px 10px 0 0' }} />
 
         {/* ── Header ────────────────────────────────────────────────────── */}
         <div style={{
-          padding:      '14px 16px 12px',
-          borderBottom: `1px solid ${P.border}`,
-          flexShrink:   0,
-          display:      'flex',
-          alignItems:   'center',
-          gap:          10,
+          padding: '11px 16px 10px', borderBottom: `1px solid ${P.border}`,
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10,
         }}>
-          {/* Helios mini-avatar SVG */}
-          <svg
-            width="34"
-            height="34"
-            viewBox="0 0 76 76"
-            style={{
-              flexShrink: 0,
-              filter: 'drop-shadow(0 3px 8px rgba(0,0,0,0.28))',
-            }}
-          >
-            <defs>
-              <radialGradient id="panel-helios-core" cx="35%" cy="18%" r="72%">
-                <stop offset="0%" stopColor="#DDFBFF" />
-                <stop offset="22%" stopColor="#6BE8FF" />
-                <stop offset="58%" stopColor="#2875FF" />
-                <stop offset="100%" stopColor="#4129E8" />
-              </radialGradient>
-              <linearGradient id="panel-wave-cyan" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#A8FFFF" stopOpacity="0.95" />
-                <stop offset="100%" stopColor="#17B6FF" stopOpacity="0.72" />
-              </linearGradient>
-              <linearGradient id="panel-wave-purple" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0%" stopColor="#C9C4FF" stopOpacity="0.82" />
-                <stop offset="100%" stopColor="#9652FF" stopOpacity="0.72" />
-              </linearGradient>
-              <radialGradient id="panel-shine-top" cx="30%" cy="16%" r="50%">
-                <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.92" />
-                <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
-              </radialGradient>
-              <clipPath id="panel-heliosClip">
-                <circle cx="38" cy="38" r="35" />
-              </clipPath>
-            </defs>
-            <circle cx="38" cy="38" r="35" fill="url(#panel-helios-core)" />
-            <g clipPath="url(#panel-heliosClip)">
-              <path d="M-8 18 C16 8, 38 8, 86 22 L86 34 C54 28, 24 28, -8 32 Z" fill="url(#panel-wave-cyan)" opacity="0.9" />
-              <path d="M-8 31 C18 24, 42 24, 86 32 L86 52 C56 46, 24 46, -8 50 Z" fill="url(#panel-wave-purple)" opacity="0.92" />
-              <path d="M-8 52 C18 42, 42 44, 86 58 L86 86 L-8 86 Z" fill="url(#panel-wave-cyan)" opacity="0.72" />
-              <ellipse cx="58" cy="24" rx="12" ry="22" fill="#FFFFFF" opacity="0.14" />
-              <ellipse cx="20" cy="58" rx="18" ry="8" fill="#8FFFFF" opacity="0.08" />
-            </g>
-            <circle cx="38" cy="38" r="35" fill="url(#panel-shine-top)" />
-            {/* Left Eye */}
-            <g>
-              <ellipse cx="26" cy="34" rx="9" ry="10.5" fill="#FFFFFF" />
-              <ellipse cx="27" cy="35" rx="6.2" ry="7.4" fill="#1841FF" />
-              <ellipse cx="28" cy="38" rx="3.8" ry="4.6" fill="#32F2FF" />
-              <ellipse cx="24" cy="31" rx="3.2" ry="4.1" fill="#FFFFFF" />
-              <circle cx="30" cy="39" r="1.5" fill="#FFFFFF" opacity="0.95" />
-            </g>
-            {/* Right Eye */}
-            <g>
-              <ellipse cx="50" cy="34" rx="9" ry="10.5" fill="#FFFFFF" />
-              <ellipse cx="51" cy="35" rx="6.2" ry="7.4" fill="#1841FF" />
-              <ellipse cx="52" cy="38" rx="3.8" ry="4.6" fill="#32F2FF" />
-              <ellipse cx="48" cy="31" rx="3.2" ry="4.1" fill="#FFFFFF" />
-              <circle cx="54" cy="39" r="1.5" fill="#FFFFFF" opacity="0.95" />
-            </g>
-            <ellipse cx="17" cy="44" rx="4" ry="2.4" fill="#FFD7FF" opacity="0.72" />
-            <ellipse cx="59" cy="44" rx="4" ry="2.4" fill="#FFD7FF" opacity="0.72" />
-            <path d="M25 46 Q38 60 51 47" fill="none" stroke="rgba(0,0,0,0.22)" strokeWidth="4" strokeLinecap="round" />
-            <path d="M25 46 Q38 58 51 46" fill="none" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" />
-            <path d="M26 45 Q38 56 50 45" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1" strokeLinecap="round" />
-            <circle cx="38" cy="38" r="35" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="1.2" />
-          </svg>
+          <HeliosAvatar size={34} />
 
-          <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: 'var(--font-head)', fontWeight: 900, fontSize: 14, color: P.text }}>
-              Helios
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {/* SKOPIA · Helios — small-caps monospace label */}
+            <div style={{
+              fontFamily: 'var(--font-mono)', fontSize: 9, fontWeight: 500,
+              letterSpacing: '0.12em', textTransform: 'uppercase', color: P.muted,
+              lineHeight: 1, marginBottom: 3,
+            }}>
+              SKOPIA · Helios
             </div>
-            <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: P.muted, marginTop: 1 }}>
-              AI Schedule Intelligence
+            {/* Project name from analysis context */}
+            <div style={{
+              fontFamily: 'var(--font-body)', fontSize: 11,
+              color: projectName ? P.mutedMid : P.muted,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              {projectName ?? 'AI Schedule Intelligence'}
             </div>
           </div>
 
+          {/* Status dot + label */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+            <span style={{
+              display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+              background: statusDot,
+              animation: loading ? 'helios-pulse 1.2s ease-in-out infinite' : 'none',
+              flexShrink: 0,
+            }} />
+            <span style={{
+              fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.08em',
+              color: loading ? P.cyan : P.online, textTransform: 'lowercase',
+            }}>
+              {statusLabel}
+            </span>
+          </div>
+
+          {/* Close × */}
           <button
             onClick={onClose}
             style={{
-              background: 'transparent', border: 'none',
-              color: P.muted, fontSize: 20, cursor: 'pointer',
-              padding: '2px 4px', lineHeight: 1,
+              background: 'transparent', border: 'none', color: P.muted,
+              fontSize: 20, cursor: 'pointer', padding: '2px 4px', lineHeight: 1,
+              marginLeft: 6, flexShrink: 0, transition: 'color 0.12s',
             }}
+            onMouseEnter={e => e.currentTarget.style.color = P.textBright}
+            onMouseLeave={e => e.currentTarget.style.color = P.muted}
             title="Close"
-          >×</button>
+          >
+            ×
+          </button>
         </div>
 
-        {/* ── Mode tabs ──────────────────────────────────────────────────── */}
-        {/* Three tabs — Health | Baseline | Forensic */}
+        {/* ── Tab bar ───────────────────────────────────────────────────── */}
         <div style={{
-          display:      'flex',
-          borderBottom: `1px solid ${P.border}`,
-          flexShrink:   0,
-          padding:      '0 16px',
-          gap:          2,
+          display: 'flex', borderBottom: `1px solid ${P.border}`,
+          flexShrink: 0, background: P.bg, padding: '0 2px',
         }}>
           {TABS.map(tab => {
             const isLocked = tab.locked(hasBaseline)
             const isActive = activeTab === tab.id
-
             return (
               <button
                 key={tab.id}
+                className="helios-tab"
+                data-locked={isLocked ? 'true' : 'false'}
                 onClick={() => !isLocked && setActiveTab(tab.id)}
                 title={isLocked ? 'Upload a baseline schedule to enable variance analysis' : undefined}
                 style={{
-                  fontFamily:   'var(--font-head)',
-                  fontWeight:   700,
-                  fontSize:     11,
-                  padding:      '10px 8px 9px',
-                  background:   'transparent',
-                  border:       'none',
-                  // Active tab border: forensic uses red accent, others use cyan
-                  borderBottom: isActive
-                    ? `2px solid ${tab.id === 'forensic' ? P.forensic : P.cyan}`
-                    : '2px solid transparent',
-                  color: isLocked
-                    ? P.muted
-                    : isActive
-                      ? (tab.id === 'forensic' ? P.forensic : P.cyan)
-                      : '#94A3B8',
-                  cursor:     isLocked ? 'not-allowed' : 'pointer',
-                  opacity:    isLocked ? 0.45 : 1,
-                  transition: 'color 0.12s, border-color 0.12s',
-                  display:    'flex',
-                  alignItems: 'center',
-                  gap:        5,
-                  whiteSpace: 'nowrap',
+                  flex: 1, fontFamily: 'var(--font-mono)', fontWeight: 500, fontSize: 10,
+                  letterSpacing: '0.04em', padding: '10px 4px 9px', background: 'transparent', border: 'none',
+                  borderBottom: isActive ? `2px solid ${tab.accentColour}` : '2px solid transparent',
+                  color: isLocked ? P.muted : isActive ? tab.accentColour : '#64748B',
+                  cursor: isLocked ? 'not-allowed' : 'pointer', opacity: isLocked ? 0.4 : 1,
+                  transition: 'color 0.12s, border-color 0.12s, background 0.1s',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  gap: 5, whiteSpace: 'nowrap', textTransform: 'uppercase',
                 }}
               >
-                <span style={{ fontSize: 13 }}>{tab.icon}</span>
-                {tab.label}
-                {/* Lock pill — shown only when tab is locked */}
+                <span style={{ fontSize: 11 }}>{tab.icon}</span>
+                <span style={{ fontSize: 10 }}>{tab.label}</span>
                 {isLocked && (
                   <span style={{
-                    fontFamily:   'var(--font-mono)',
-                    fontSize:     8,
-                    background:   'rgba(255,255,255,0.08)',
-                    borderRadius: 3,
-                    padding:      '1px 5px',
-                    marginLeft:   2,
-                    color:        P.muted,
+                    fontFamily: 'var(--font-mono)', fontSize: 7, background: 'rgba(255,255,255,0.06)',
+                    borderRadius: 2, padding: '1px 4px', marginLeft: 1, color: P.muted, letterSpacing: '0.04em',
                   }}>
                     {tab.lockLabel}
                   </span>
@@ -456,186 +534,214 @@ export default function HeliosPanel({ open, onClose }) {
           })}
         </div>
 
-        {/* ── Body ──────────────────────────────────────────────────────── */}
-        <div style={{
-          flex:       1,
-          overflowY:  'auto',
-          padding:    '16px',
-          display:    'flex',
-          flexDirection: 'column',
-          gap:        12,
-        }}>
+        {/* ── Body — two-column landscape split ─────────────────────────── */}
+        {/*
+          Left (300px fixed): terminal prompt, loading state, error, PDF notice.
+          Right (flex:1): insight content card OR selectable feature tiles.
+          Both columns are independently scrollable.
+          minHeight:0 on the row is required for flex children to scroll correctly.
+        */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden', minHeight: 0 }}>
 
-          {/* ── No schedule loaded state ─────────────────────────────────── */}
-          {!analysis && (
-            <div style={{
-              flex:           1,
-              display:        'flex',
-              flexDirection:  'column',
-              alignItems:     'center',
-              justifyContent: 'center',
-              gap:            12,
-              opacity:        0.55,
-              paddingBottom:  40,
-            }}>
-              <div style={{ fontSize: 36, opacity: 0.3 }}>◈</div>
-              <div style={{ fontFamily: 'var(--font-body)', fontSize: 13, color: P.muted, textAlign: 'center' }}>
-                Upload a schedule to generate AI insights
+          {/* LEFT — prompt + status area */}
+          <div className="helios-scroll" style={{
+            width: 300, flexShrink: 0, borderRight: `1px solid ${P.border}`,
+            overflowY: 'auto', padding: '14px', display: 'flex', flexDirection: 'column', gap: 10,
+          }}>
+
+            {/* No schedule loaded */}
+            {!analysis && (
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 14, paddingBottom: 40, opacity: 0.5,
+              }}>
+                <div style={{ fontSize: 32, opacity: 0.25 }}>◈</div>
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 11, color: P.muted,
+                  textAlign: 'center', letterSpacing: '0.04em',
+                }}>
+                  Upload a schedule to generate AI insights
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* ── Baseline tab: no baseline prompt ─────────────────────────── */}
-          {analysis && activeTab === 'baseline' && !hasBaseline && (
-            <div style={{
-              background:   'rgba(74,111,232,0.08)',
-              border:       `1px solid ${P.border}`,
-              borderRadius: 8,
-              padding:      '14px 14px',
-              display:      'flex',
-              gap:          10,
-              alignItems:   'flex-start',
-            }}>
-              <span style={{ fontSize: 18, flexShrink: 0 }}>⬆</span>
+            {/* Baseline tab — no baseline uploaded */}
+            {analysis && activeTab === 'baseline' && !hasBaseline && (
+              <div style={{
+                background: 'rgba(74,111,232,0.06)', border: `1px solid rgba(74,111,232,0.2)`,
+                borderLeft: `3px solid ${P.peri}`, borderRadius: 4, padding: '12px 14px',
+                display: 'flex', gap: 10, alignItems: 'flex-start',
+              }}>
+                <span style={{ fontSize: 16, flexShrink: 0, color: P.peri }}>⬆</span>
+                <div>
+                  <div style={{
+                    fontFamily: 'var(--font-mono)', fontWeight: 500, fontSize: 10,
+                    color: P.textBright, marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase',
+                  }}>
+                    No baseline loaded
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: P.mutedMid, lineHeight: 1.6 }}>
+                    Upload a baseline schedule in the Upload view to enable variance analysis —
+                    finish date movement, float erosion, and critical path changes.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Terminal prompt line — shows active mode's prompt text */}
+            {analysis && !tabIsLocked && (
+              <div style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 10px',
+                background: P.surfaceHigh, border: `1px solid ${P.borderSubtle}`, borderRadius: 4,
+              }}>
+                {/* > prompt character — coloured to match the active mode */}
+                <span style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 12,
+                  color: activeTabDef?.accentColour ?? P.cyan,
+                  flexShrink: 0, marginTop: 1, userSelect: 'none',
+                }}>
+                  &gt;
+                </span>
+                <span style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: P.mutedMid, lineHeight: 1.55 }}>
+                  {activeTabDef?.prompt}
+                </span>
+              </div>
+            )}
+
+            {/* Loading — typewriter style */}
+            {loading && (
+              <div style={{ padding: '14px 12px', background: P.surface, border: `1px solid ${P.borderSubtle}`, borderRadius: 4 }}>
+                <AnalysingLabel mode={activeTab} />
+              </div>
+            )}
+
+            {/* Error */}
+            {error && (
+              <div style={{
+                background: 'rgba(220,38,38,0.08)', border: `1px solid rgba(220,38,38,0.25)`,
+                borderLeft: `3px solid ${P.fail}`, borderRadius: 4, padding: '9px 12px',
+                fontFamily: 'var(--font-mono)', fontSize: 11, color: '#FCA5A5',
+                lineHeight: 1.5, letterSpacing: '0.02em',
+              }}>
+                ⚠  {error}
+              </div>
+            )}
+
+            {/* PDF indexed notice — pinned to bottom of left column */}
+            {currentInsight && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'var(--font-mono)',
+                fontSize: 9, color: P.muted, padding: '3px 2px', letterSpacing: '0.03em', marginTop: 'auto',
+              }}>
+                <span style={{ color: P.pass, fontSize: 10 }}>✓</span>
+                indexed · will appear in next export
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT — insight content OR selectable feature tiles */}
+          <div className="helios-scroll" style={{
+            flex: 1, overflowY: 'auto', padding: '14px',
+            display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0,
+          }}>
+
+            {/* Insight content card */}
+            {currentInsight && (
+              <div className="helios-insight-card" style={{
+                background: P.surface, border: `1px solid ${P.borderSubtle}`,
+                borderLeft: `3px solid ${activeTabDef?.accentColour ?? P.cyan}`,
+                borderRadius: 4, padding: '14px',
+              }}>
+                <GeneratedAt isoStr={currentInsight.generatedAt} />
+                <InsightContent content={currentInsight.content} mode={activeTab} />
+              </div>
+            )}
+
+            {/* Selectable feature tiles — visible before first generation */}
+            {showFeatureTiles && (
               <div>
-                <div style={{ fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 12, color: P.text, marginBottom: 4 }}>
-                  No baseline loaded
+                {/* Section label */}
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 9, letterSpacing: '0.1em',
+                  textTransform: 'uppercase', color: P.muted, marginBottom: 10, padding: '0 2px',
+                }}>
+                  What Helios can do
                 </div>
-                <div style={{ fontFamily: 'var(--font-body)', fontSize: 12, color: P.muted, lineHeight: 1.6 }}>
-                  Upload a baseline schedule in the Upload view to enable
-                  variance analysis — finish date movement, float erosion,
-                  and critical path changes.
+
+                {/* Three mode tiles — clicking switches activeTab */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {TABS.map(tab => (
+                    <FeatureTile
+                      key={tab.id}
+                      tab={tab}
+                      isActive={activeTab === tab.id}
+                      isLocked={tab.locked(hasBaseline)}
+                      onClick={handleTileSelect}
+                    />
+                  ))}
+                </div>
+
+                {/* Helper hint */}
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 9, color: P.muted,
+                  marginTop: 14, padding: '0 2px', letterSpacing: '0.03em',
+                }}>
+                  Select a mode above, then click Run Analysis.
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* ── Mode description chip ─────────────────────────────────────── */}
-          {showDescChip && (
-            <div style={{
-              ...chipStyle,
-              borderRadius: 6,
-              padding:      '8px 12px',
-              fontFamily:   'var(--font-body)',
-              fontSize:     11,
-              lineHeight:   1.5,
-            }}>
-              {activeTabDef?.description(hasBaseline)}
-            </div>
-          )}
-
-          {/* ── Error display ─────────────────────────────────────────────── */}
-          {error && (
-            <div style={{
-              background:   'rgba(220,38,38,0.1)',
-              border:       `1px solid rgba(220,38,38,0.3)`,
-              borderRadius: 6,
-              padding:      '9px 12px',
-              fontFamily:   'var(--font-body)',
-              fontSize:     12,
-              color:        '#FCA5A5',
-              lineHeight:   1.5,
-            }}>
-              ⚠ {error}
-            </div>
-          )}
-
-          {/* ── Stored insight content ─────────────────────────────────────── */}
-          {currentInsight && (
-            <div style={{
-              background:   P.surface,
-              // Forensic card gets a red left border to signal risk tone
-              border:       activeTab === 'forensic'
-                ? `1px solid rgba(220,38,38,0.3)`
-                : `1px solid ${P.border}`,
-              borderLeft:   activeTab === 'forensic'
-                ? `3px solid ${P.forensic}`
-                : `1px solid ${P.border}`,
-              borderRadius: 8,
-              padding:      '14px',
-            }}>
-              <GeneratedAt isoStr={currentInsight.generatedAt} />
-              <InsightContent content={currentInsight.content} mode={activeTab} />
-            </div>
-          )}
-
-          {/* ── Saved to PDF notice ────────────────────────────────────────── */}
-          {currentInsight && (
-            <div style={{
-              display:    'flex',
-              alignItems: 'center',
-              gap:        6,
-              fontFamily: 'var(--font-body)',
-              fontSize:   10,
-              color:      P.muted,
-              padding:    '4px 2px',
-            }}>
-              <span style={{ fontSize: 12 }}>✓</span>
-              Insights saved — included in next PDF export
-            </div>
-          )}
-
+            {/* Right column empty state when no analysis loaded */}
+            {!analysis && (
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div style={{
+                  fontFamily: 'var(--font-mono)', fontSize: 11, color: P.muted,
+                  textAlign: 'center', letterSpacing: '0.04em', opacity: 0.5,
+                }}>
+                  Insights will appear here
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* ── Footer: Generate button ────────────────────────────────────── */}
-        {/* Show footer when analysis loaded and the active tab can generate */}
+        {/* ── Footer — Run Analysis button (full width) ─────────────────── */}
         {analysis && !tabIsLocked && (
           <div style={{
-            padding:    '12px 16px',
-            borderTop:  `1px solid ${P.border}`,
-            flexShrink: 0,
-            display:    'flex',
-            gap:        8,
+            padding: '10px 16px 12px', borderTop: `1px solid ${P.border}`,
+            flexShrink: 0, background: P.bg, borderRadius: '0 0 10px 10px',
           }}>
             <button
               onClick={handleGenerate}
               disabled={loading || !canGenerate}
               style={{
-                flex:        1,
-                fontFamily:  'var(--font-head)',
-                fontWeight:  700,
-                fontSize:    12,
-                padding:     '10px 0',
-                borderRadius: 7,
-                border:      'none',
-                // Forensic generate button uses a red-to-amber gradient to reinforce the risk tone
-                background:  loading || !canGenerate
-                  ? 'rgba(255,255,255,0.08)'
-                  : activeTab === 'forensic'
-                    ? 'linear-gradient(135deg,#DC2626,#D97706)'
-                    : P.grad,
-                color:       loading || !canGenerate ? P.muted : '#ffffff',
-                cursor:      loading || !canGenerate ? 'not-allowed' : 'pointer',
-                display:     'flex',
-                alignItems:  'center',
-                justifyContent: 'center',
-                gap:         7,
-                transition:  'background 0.15s, opacity 0.15s',
+                width: '100%', fontFamily: 'var(--font-mono)', fontWeight: 500,
+                fontSize: 12, letterSpacing: '0.05em', padding: '10px 0', borderRadius: 4,
+                border: loading || !canGenerate
+                  ? `1px solid ${P.borderSubtle}`
+                  : `1px solid ${(activeTabDef?.accentColour ?? P.cyan)}55`,
+                background: loading || !canGenerate
+                  ? 'rgba(255,255,255,0.04)'
+                  : `${activeTabDef?.accentColour ?? P.cyan}14`,
+                color: loading || !canGenerate
+                  ? P.muted
+                  : activeTab === 'forensic' ? '#FCA5A5' : P.cyan,
+                cursor: loading || !canGenerate ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                transition: 'background 0.15s, border-color 0.15s',
+              }}
+              onMouseEnter={e => {
+                if (!loading && canGenerate) e.currentTarget.style.background = `${activeTabDef?.accentColour ?? P.cyan}22`
+              }}
+              onMouseLeave={e => {
+                if (!loading && canGenerate) e.currentTarget.style.background = `${activeTabDef?.accentColour ?? P.cyan}14`
               }}
             >
-              {loading ? (
-                <>
-                  <div style={{
-                    width: 12, height: 12,
-                    border: '2px solid rgba(255,255,255,0.2)',
-                    borderTopColor: '#fff',
-                    borderRadius: '50%',
-                    animation: 'helios-spin 0.7s linear infinite',
-                  }} />
-                  {activeTab === 'forensic' ? 'Auditing…' : 'Analysing…'}
-                </>
-              ) : (
-                <>
-                  {activeTab === 'forensic' ? '⚑' : '✦'}&nbsp;
-                  {currentInsight
-                    ? (activeTab === 'forensic' ? 'Re-run Forensic Audit' : 'Regenerate Insights')
-                    : (activeTab === 'forensic' ? 'Run Forensic Audit' : 'Generate Insights')
-                  }
-                </>
-              )}
+              {loading ? <AnalysingLabel mode={activeTab} /> : buttonLabel}
             </button>
           </div>
         )}
+
       </div>
     </>
   )
