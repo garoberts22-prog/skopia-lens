@@ -1443,6 +1443,38 @@
   </div>
   {% endif %}
 
+  <!-- Forensic Risk Analysis block -->
+  {% if helios_insights.forensic %}
+  <div style="margin-bottom: 20px; background: #FFF9F9; border: 1px solid #FECACA;
+              border-left: 4px solid #DC2626; border-radius: 6px; padding: 14px 16px;">
+    <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
+                font-size: 9.5pt; color: #DC2626; text-transform: uppercase;
+                letter-spacing: 0.06em; margin-bottom: 10px;">⚑ Forensic Risk Analysis</div>
+
+    {% set lines = helios_insights.forensic.content.split('\n') %}
+    {% for line in lines %}
+      {% if line.strip() == '' %}
+        <div style="height: 6px;"></div>
+      {% elif line.strip().startswith('**') and line.strip().endswith('**') %}
+        <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
+                    font-size: 9pt; color: #7F1D1D; margin-top: 10px; margin-bottom: 3px;">
+          {{ line.strip().replace('**', '') }}
+        </div>
+      {% else %}
+        <div style="font-size: 8.5pt; color: #374151; line-height: 1.65; margin-bottom: 2px;">
+          {{ line }}
+        </div>
+      {% endif %}
+    {% endfor %}
+
+    <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #FECACA;
+                font-size: 6.5pt; color: #9CA3AF; font-family: 'JetBrains Mono', monospace;">
+      Generated {{ helios_insights.forensic.generatedAt[:16] | replace('T', ' ') }} ·
+      Helios AI · SKOPIA Lens · Forensic Analysis
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Disclaimer -->
   <div style="font-size: 6.5pt; color: #9CA3AF; font-family: 'Open Sans', Arial, sans-serif;
               border-top: 1px solid #E2E6F0; padding-top: 8px; line-height: 1.5;">

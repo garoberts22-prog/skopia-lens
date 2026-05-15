@@ -1,5 +1,5 @@
 """
-SKOPIA Lens — Helios AI Endpoint (v1.0)
+SKOPIA Lens — Helios AI Endpoint (v1.1)
 ----------------------------------------
 POST /api/helios
 
@@ -7,10 +7,13 @@ Accepts the analysis JSON (and optionally a baseline JSON) from the
 frontend AnalysisContext and calls the Anthropic API to generate
 plain-English schedule insights.
 
-Two insight modes:
+Three insight modes:
   - health   : Ranks top risks from checks, float, bottlenecks, longest path
   - baseline : Compares current schedule against baseline for finish date
                 movement, float erosion, and new/removed critical activities
+  - forensic : Deep EPC/EPCM forensic audit — float distribution, near-critical
+                path exposure, ranked risks (High/Medium), and actionable
+                recommendations. Modelled on forensic planning standards.
 
 The API key is read from the ANTHROPIC_API_KEY environment variable.
 Set it in your .env file locally and in Railway environment variables
@@ -19,9 +22,9 @@ for production.
 USAGE (from frontend):
   POST /api/helios
   Content-Type: application/json
-  Body: { "mode": "health"|"baseline", "analysis": {...}, "baseline": {...}|null }
+  Body: { "mode": "health"|"baseline"|"forensic", "analysis": {...}, "baseline": {...}|null }
 
-  Response: { "mode": "health"|"baseline", "content": "...", "generated_at": "..." }
+  Response: { "mode": "health"|"baseline"|"forensic", "content": "...", "generated_at": "..." }
 
 REGISTER IN main.py:
   from api.helios_endpoint import router as helios_router
@@ -41,12 +44,9 @@ from pydantic import BaseModel
 router = APIRouter()
 
 # ── Anthropic API config ──────────────────────────────────────────────────────
-# Key must be set in environment — never hardcoded.
-# Local: add ANTHROPIC_API_KEY=sk-ant-... to your .env file in the backend root.
-# Production (Railway): set via Railway dashboard → Variables tab.
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL   = "claude-sonnet-4-5"   # Sonnet — fast, cost-efficient
-MAX_TOKENS        = 1024                           # Generous for a structured insight response
+ANTHROPIC_MODEL   = "claude-sonnet-4-5"
+MAX_TOKENS        = 1500   # Increased for forensic mode — longer structured output
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -54,7 +54,7 @@ MAX_TOKENS        = 1024                           # Generous for a structured i
 class HeliosRequest(BaseModel):
     """
     Payload sent from the frontend HeliosPanel.
-    mode:     'health' | 'baseline'
+    mode:     'health' | 'baseline' | 'forensic'
     analysis: the full analysis object from AnalysisContext
     baseline: the baseline analysis object (only required for 'baseline' mode)
     """
@@ -70,9 +70,6 @@ class HeliosResponse(BaseModel):
 
 
 # ── System prompts ────────────────────────────────────────────────────────────
-#
-# These prompts define Helios's persona and constrain the response format.
-# Critical rule: never invent data. Only reference fields present in the JSON.
 
 SYSTEM_HEALTH = """You are Helios, SKOPIA's schedule intelligence assistant.
 You analyse construction and engineering schedule health data and return
@@ -102,12 +99,52 @@ Rules:
   further slippage, with their current float and reason.
 - Total response: under 350 words."""
 
+# Forensic mode system prompt — positions Helios as an experienced EPC/EPCM
+# forensic planner. Direct, evidence-based, no hedging.
+SYSTEM_FORENSIC = """You are Helios, acting as a senior forensic planner and scheduler
+with deep EPC/EPCM project delivery experience. You conduct forensic schedule audits
+for project controls professionals, planners, and project managers.
+
+Your role is to critically examine the schedule data provided and produce a structured
+forensic risk report. You are direct, evidence-based, and do not hedge findings.
+
+Forensic standards:
+- If float is zero, state it is zero — do not say "may be critical".
+- Cite specific activity IDs, float values, durations, and path groupings from the data.
+- Distinguish between schedule quality issues (logic gaps, constraints) and delivery risks
+  (near-critical paths, float erosion, bottleneck exposure).
+- Never invent data. All assertions must reference values present in the provided JSON.
+- Do not describe things as "potential" risks if the data shows a direct exposure.
+
+Required output structure (use exactly these bold headings, in this order):
+
+**Float Distribution Assessment**
+2–3 sentences on the float profile — what the distribution reveals about schedule health,
+absorption capacity, and whether the critical path is realistic.
+
+**Near-Critical Path Exposure**
+Identify the activities or path chains with the least float. Cite activity IDs and float
+values. State what they drive and what the consequence of delay is.
+
+**Top Schedule Risks**
+List the top 3–5 risks ranked by severity. For each:
+  RISK [n] — [Short specific title] — Severity: High/Medium
+  Evidence: [specific data — IDs, float, durations, constraints]
+  Impact: [what happens if this risk materialises]
+
+**Schedule Quality Flags**
+2–3 sentences on any logic, constraint, or relationship integrity issues that reduce
+schedule reliability (high lags, hard constraints on near-critical activities,
+SF relationships, open ends, low logic density).
+
+**Recommended Actions**
+Exactly 4–6 numbered action items, each specific and actionable. Reference the data.
+Prioritise by urgency — immediate actions first.
+
+Total response: under 500 words. No preamble. Start directly with the first heading."""
+
 
 # ── Context builders ──────────────────────────────────────────────────────────
-#
-# These functions extract the relevant fields from the analysis JSON and build
-# a compact summary string to send to the AI. This keeps token usage low by
-# avoiding sending the entire (potentially large) analysis object.
 
 def _build_health_context(analysis: dict) -> str:
     """Build a compact health context string from the analysis object."""
@@ -117,7 +154,6 @@ def _build_health_context(analysis: dict) -> str:
     net   = analysis.get("network_metrics", {})
     lpath = analysis.get("longest_path", [])
 
-    # Summarise checks — only include failing/warning ones to keep context tight
     check_lines = []
     for c in chks:
         if c.get("status") in ("fail", "warn"):
@@ -129,12 +165,10 @@ def _build_health_context(analysis: dict) -> str:
             )
     checks_str = "\n".join(check_lines) if check_lines else "  All checks passing."
 
-    # Float histogram summary
     bins = hist.get("bins", [])
     hist_lines = [f"  {b['label']}: {b['count']} activities" for b in bins[:5]]
     hist_str = "\n".join(hist_lines)
 
-    # Top 3 bottlenecks
     bots = net.get("top_bottlenecks", [])[:3]
     bot_lines = [
         f"  - {b.get('name','?')} (score {b.get('score','?')}, "
@@ -144,7 +178,6 @@ def _build_health_context(analysis: dict) -> str:
     ]
     bot_str = "\n".join(bot_lines) if bot_lines else "  None identified."
 
-    # Critical path summary
     cp_finish = lpath[-1].get("finish","?") if lpath else "?"
     cp_dur    = sum(a.get("duration_days", 0) for a in lpath)
 
@@ -195,17 +228,14 @@ def _build_baseline_context(analysis: dict, baseline: dict) -> str:
     def grade(a: dict) -> str:
         return f"{a.get('overall_grade','?')} ({a.get('overall_score','?')}%)"
 
-    # Float erosion
     float_delta_mean   = round(mean_float(analysis) - mean_float(baseline), 1)
     float_delta_median = round(median_float(analysis) - median_float(baseline), 1)
 
-    # Critical path activities in current but not in baseline (new risks)
     curr_cp_ids = {a.get("id") for a in analysis.get("longest_path", [])}
     base_cp_ids = {a.get("id") for a in baseline.get("longest_path", [])}
-    new_critical  = curr_cp_ids - base_cp_ids
+    new_critical     = curr_cp_ids - base_cp_ids
     dropped_critical = base_cp_ids - curr_cp_ids
 
-    # Failing/warn checks in current
     curr_fail = [
         f"  - {c['check_name']}: {c.get('metric_value','?')} ({c['status'].upper()})"
         for c in analysis.get("checks", [])
@@ -254,14 +284,163 @@ Baseline incomplete: {baseline.get("summary_stats",{}).get("incomplete_tasks","?
 Current incomplete:  {analysis.get("summary_stats",{}).get("incomplete_tasks","?")}"""
 
 
+def _build_forensic_context(analysis: dict) -> str:
+    """
+    Build a detailed forensic context from the analysis object.
+
+    Extracts more data than the health context — near-critical activities,
+    full float distribution, constraint summary, and relationship quality
+    indicators — to support the forensic AI's deeper analysis.
+    """
+    s     = analysis.get("summary_stats", {})
+    chks  = analysis.get("checks", [])
+    hist  = analysis.get("float_histogram", {})
+    net   = analysis.get("network_metrics", {})
+    lpath = analysis.get("longest_path", [])
+    rb    = analysis.get("relationship_breakdown", {})
+    sd    = analysis.get("schedule_data", {})
+    acts  = sd.get("activities", []) if sd else []
+
+    # ── Float distribution — all bins ────────────────────────────────────────
+    bins = hist.get("bins", [])
+    hist_lines = [f"  {b['label']}: {b['count']} activities" for b in bins]
+    hist_str = "\n".join(hist_lines) if hist_lines else "  No float data."
+
+    # ── Near-critical activities (TF < 80 hours = 10 working days) ───────────
+    # 80 hrs = 2 weeks on a 5-day/40hr calendar. Flag as near-critical.
+    NEAR_CRITICAL_DAYS = 10   # working days — equivalent to 80 hrs on 8hr calendar
+    near_critical = [
+        a for a in acts
+        if (
+            a.get("status") not in ("complete", "Complete", "TK_Complete")
+            and a.get("total_float") is not None
+            and 0 < float(a.get("total_float", 999)) <= NEAR_CRITICAL_DAYS
+        )
+    ]
+    # Sort ascending by float so the most exposed are first
+    near_critical.sort(key=lambda a: float(a.get("total_float", 999)))
+
+    nc_lines = [
+        f"  {a.get('id','?'):20s}  TF={float(a.get('total_float',0)):.1f}d  "
+        f"dur={a.get('orig_dur','?')}d  {str(a.get('name',''))[:50]}"
+        for a in near_critical[:15]   # top 15 most exposed
+    ]
+    nc_str = "\n".join(nc_lines) if nc_lines else "  None identified."
+    nc_count = len(near_critical)
+
+    # ── Critical path summary (longest path) ─────────────────────────────────
+    cp_finish = lpath[-1].get("finish","?") if lpath else "?"
+    cp_dur    = sum(a.get("duration_days", 0) for a in lpath)
+    cp_lines  = [
+        f"  {a.get('id','?'):20s}  dur={a.get('duration_days','?')}d  "
+        f"float={a.get('float_days','?')}d  {str(a.get('name',''))[:40]}"
+        for a in lpath[:10]   # first 10 activities on the critical path
+    ]
+    cp_str = "\n".join(cp_lines) if cp_lines else "  No critical path data."
+
+    # ── Top bottlenecks ───────────────────────────────────────────────────────
+    bots = net.get("top_bottlenecks", [])[:10]
+    bot_lines = [
+        f"  {b.get('id','?'):20s}  score={b.get('score','?')}  "
+        f"in={b.get('fan_in','?')} out={b.get('fan_out','?')}  "
+        f"float={b.get('float_days','?')}d  "
+        f"{'CRITICAL' if b.get('is_critical') else 'non-critical'}  "
+        f"{str(b.get('name',''))[:40]}"
+        for b in bots
+    ]
+    bot_str = "\n".join(bot_lines) if bot_lines else "  None identified."
+
+    # ── Failing/warning health checks ────────────────────────────────────────
+    check_lines = []
+    for c in chks:
+        if c.get("status") in ("fail", "warn"):
+            check_lines.append(
+                f"  [{c['status'].upper()}] {c['check_name']} ({c.get('dcma_ref','')}) — "
+                f"metric={c.get('metric_value','?')} threshold={c.get('threshold_value','?')} "
+                f"flagged={c.get('flagged_count',0)}"
+            )
+    checks_str = "\n".join(check_lines) if check_lines else "  All checks passing."
+
+    # ── Constraint summary (from flagged items on constraints check) ──────────
+    cstr_check = next(
+        (c for c in chks if c.get("check_id") == "hard_constraints"), None
+    )
+    cstr_count  = cstr_check.get("flagged_count", 0) if cstr_check else "unknown"
+    cstr_status = cstr_check.get("status", "unknown") if cstr_check else "unknown"
+
+    # ── Relationship quality ──────────────────────────────────────────────────
+    total_rels = rb.get("total", 0) or 1   # avoid div/0
+    fs_pct  = round(rb.get("FS",  0) / total_rels * 100, 1)
+    sf_count = rb.get("SF", 0)
+
+    # Lag check details
+    lag_check = next(
+        (c for c in chks if c.get("check_id") == "lags"), None
+    )
+    lag_pct = lag_check.get("metric_value", "?") if lag_check else "?"
+
+    lead_check = next(
+        (c for c in chks if c.get("check_id") == "leads"), None
+    )
+    lead_count = lead_check.get("flagged_count", 0) if lead_check else "?"
+
+    return f"""FORENSIC SCHEDULE AUDIT DATA
+Project:          {analysis.get("project_name","?")}
+Source format:    {analysis.get("source_format","?").upper()}
+Data date:        {analysis.get("data_date","?")[:10]}
+Project start:    {sd.get("project_start","?")[:10] if sd else "?"}
+Project finish:   {sd.get("project_finish","?")[:10] if sd else "?"}
+Overall grade:    {analysis.get("overall_grade","?")} ({analysis.get("overall_score","?")}%)
+
+ACTIVITY SUMMARY
+Total activities:     {s.get("total_activities","?")}
+Detail tasks:         {s.get("detail_tasks","?")}
+Incomplete tasks:     {s.get("incomplete_tasks","?")}
+Completed tasks:      {s.get("completed_tasks","?")}
+In-progress tasks:    {s.get("in_progress_tasks","?")}
+Milestones:           {s.get("milestones","?")}
+Total relationships:  {s.get("total_relationships","?")}
+
+FLOAT DISTRIBUTION (all bins)
+Mean float:  {hist.get("mean_float_days","?")} days
+Median float:{hist.get("median_float_days","?")} days
+{hist_str}
+
+NEAR-CRITICAL ACTIVITIES (TF 0–{NEAR_CRITICAL_DAYS} working days, incomplete only)
+Count: {nc_count}
+{nc_str}
+
+CRITICAL PATH (longest path, first 10 activities)
+Activities on CP: {len(lpath)}
+CP duration:      {cp_dur} working days
+Forecast finish:  {cp_finish}
+{cp_str}
+
+TOP BOTTLENECKS (fan-in × fan-out score)
+{bot_str}
+
+NETWORK QUALITY
+Open starts (no predecessor):  {net.get("open_starts","?")}
+Open ends (no successor):       {net.get("open_ends","?")}
+Logic density (rels/task):      {net.get("ratio","?")}
+FS relationships:               {rb.get("FS",0)} ({fs_pct}% of total)
+SF relationships:               {sf_count} (SF almost always indicates error)
+Positive lags (% of rels):      {lag_pct}%
+Negative lags (leads) count:    {lead_count}
+
+CONSTRAINTS
+Hard constraint count (flagged): {cstr_count}  Status: {cstr_status}
+
+FAILING / WARNING HEALTH CHECKS
+{checks_str}"""
+
+
 # ── Anthropic API call ────────────────────────────────────────────────────────
 
 async def _call_anthropic(system_prompt: str, user_message: str) -> str:
     """
     Call the Anthropic Messages API with the given system and user prompts.
     Uses httpx async client — compatible with FastAPI's async event loop.
-
-    Raises HTTPException on API errors so FastAPI handles them gracefully.
     """
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
@@ -289,8 +468,7 @@ async def _call_anthropic(system_prompt: str, user_message: str) -> str:
         "messages":   [{"role": "user", "content": user_message}],
     }
 
-    # 30s timeout — schedule analysis is fast but Anthropic can be slow under load
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=45.0) as client:  # 45s — forensic mode is longer
         try:
             resp = await client.post(ANTHROPIC_API_URL, json=payload, headers=headers)
         except httpx.TimeoutException:
@@ -305,7 +483,6 @@ async def _call_anthropic(system_prompt: str, user_message: str) -> str:
             )
 
     if resp.status_code != 200:
-        # Surface Anthropic's error message where possible
         try:
             err_body = resp.json()
             msg = err_body.get("error", {}).get("message", f"HTTP {resp.status_code}")
@@ -316,7 +493,6 @@ async def _call_anthropic(system_prompt: str, user_message: str) -> str:
             detail={"error": "helios_api_error", "message": msg},
         )
 
-    # Extract the text content from the first content block
     data = resp.json()
     try:
         return data["content"][0]["text"]
@@ -337,7 +513,8 @@ async def _call_anthropic(system_prompt: str, user_message: str) -> str:
         "Accepts the current analysis (and optionally a baseline) and returns "
         "plain-English AI-generated schedule insights via Anthropic Claude.\n\n"
         "mode='health'   → ranks top 3 risks from health check data\n"
-        "mode='baseline' → compares current vs baseline for schedule variance"
+        "mode='baseline' → compares current vs baseline for schedule variance\n"
+        "mode='forensic' → deep EPC/EPCM forensic audit with ranked risks and recommendations"
     ),
 )
 async def helios_insights(req: HeliosRequest):
@@ -346,14 +523,12 @@ async def helios_insights(req: HeliosRequest):
     Body: { mode, analysis, baseline? }
     Response: { mode, content, generated_at }
     """
-    # Validate mode
-    if req.mode not in ("health", "baseline"):
+    if req.mode not in ("health", "baseline", "forensic"):
         raise HTTPException(
             status_code=400,
-            detail={"error": "invalid_mode", "message": "mode must be 'health' or 'baseline'"},
+            detail={"error": "invalid_mode", "message": "mode must be 'health', 'baseline', or 'forensic'"},
         )
 
-    # Baseline mode requires baseline data
     if req.mode == "baseline" and not req.baseline:
         raise HTTPException(
             status_code=400,
@@ -363,15 +538,17 @@ async def helios_insights(req: HeliosRequest):
             },
         )
 
-    # Build context and select system prompt
+    # Select system prompt and build context for the requested mode
     if req.mode == "health":
         system_prompt = SYSTEM_HEALTH
         user_message  = _build_health_context(req.analysis)
-    else:
+    elif req.mode == "baseline":
         system_prompt = SYSTEM_BASELINE
         user_message  = _build_baseline_context(req.analysis, req.baseline)
+    else:  # forensic
+        system_prompt = SYSTEM_FORENSIC
+        user_message  = _build_forensic_context(req.analysis)
 
-    # Call Anthropic
     content = await _call_anthropic(system_prompt, user_message)
 
     return HeliosResponse(
