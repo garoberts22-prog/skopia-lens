@@ -1,6 +1,6 @@
 // ── AnalysisContext.jsx ───────────────────────────────────────────────────────
 //
-// v1.1 — Added heliosInsights state for Helios AI panel.
+// v1.2 — Added forensic mode to heliosInsights state.
 //
 // WHAT IT STORES:
 //   analysis        — full JSON from POST /api/analyse (null before upload)
@@ -12,10 +12,12 @@
 //     {
 //       health:   { content: string, generatedAt: string } | null,
 //       baseline: { content: string, generatedAt: string } | null,
+//       forensic: { content: string, generatedAt: string } | null,
 //     }
 //
-//   Cleared automatically when a new schedule is uploaded (setAnalysis resets it).
-//   Baseline insights cleared when setBaseline(null) is called.
+//   All three modes are cleared when a new schedule is uploaded (setAnalysis).
+//   Baseline mode is also cleared independently when setBaseline(null) is called.
+//   Forensic mode operates on the current schedule only — not cleared on baseline change.
 //
 // HOW TO USE:
 //   import { useAnalysis } from '../context/AnalysisContext'
@@ -32,28 +34,29 @@ export function AnalysisProvider({ children }) {
   const [analysis,  setAnalysisRaw]  = useState(null)
   const [baseline,  setBaselineRaw]  = useState(null)
 
-  // heliosInsights — persisted across views, included in PDF payload
-  // Both modes start null. Each is set independently when Helios runs.
+  // heliosInsights — persisted across views, included in PDF payload.
+  // All three modes start null. Each is set independently when Helios runs.
   const [heliosInsights, setHeliosInsights] = useState({
     health:   null,   // { content: string, generatedAt: string }
     baseline: null,   // { content: string, generatedAt: string }
+    forensic: null,   // { content: string, generatedAt: string }
   })
 
   // ── Wrapped setters ───────────────────────────────────────────────────────
   //
-  // When a new schedule is uploaded, clear all derived state (Helios insights)
-  // so stale AI content doesn't persist against a new file.
+  // When a new schedule is uploaded, clear ALL derived state so stale AI
+  // content never persists against a new file.
 
   const setAnalysis = useCallback((data) => {
     setAnalysisRaw(data)
-    // Clear both Helios insight modes on new schedule upload
-    setHeliosInsights({ health: null, baseline: null })
+    // Clear all three Helios insight modes on new schedule upload
+    setHeliosInsights({ health: null, baseline: null, forensic: null })
   }, [])
 
   const setBaseline = useCallback((data) => {
     setBaselineRaw(data)
-    // Clear only the baseline insight when baseline changes
-    // Health insight is still valid for the current schedule
+    // Clear only the baseline insight when baseline changes.
+    // Health and forensic insights are still valid for the current schedule.
     if (!data) {
       setHeliosInsights(prev => ({ ...prev, baseline: null }))
     }
