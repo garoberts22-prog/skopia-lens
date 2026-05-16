@@ -4,27 +4,29 @@
 <meta charset="UTF-8">
 <style>
   /*
-   * SKOPIA Lens — PDF Report Template (v2.0)
+   * SKOPIA Lens — PDF Report Template (v3.0)
    *
-   * SECTION ORDER (matches Report Wizard):
-   *   ① Cover, Grade & Stats   — header, grade ring, stat tiles, DCMA checks table + sidebar
-   *   ② Schedule (Table)        — full activity listing with start/finish/duration/float/status
-   *   ③ Critical Path Trace     — ordered longest-path activities
-   *   ④ Analytics               — float histogram, relationship breakdown, bottleneck top-10
+   * PAGE STRUCTURE:
+   *   Page 1  — Cover: Header · Grade ring + stat tiles · Two-col (checks table | spider chart) · Actions Required
+   *   Page 2  — Helios AI Insights (health / baseline / forensic) — conditional
+   *   Pages 3+— Per-check detail pages (one per check in checks[])
+   *   Pages N+— Schedule Table with inline Gantt bars — conditional on _scene_data
    *
-   * WEASYPRINT CONSTRAINTS (strictly followed):
-   *   - No CSS Grid (partial support only — use flex + table instead)
-   *   - No -webkit-background-clip: text (gradient text not supported)
-   *   - No border-image
-   *   - Gradients on background: work fine on block elements
-   *   - @page running headers/footers: supported
-   *   - SVG inline: supported
-   *   - Fonts via Google CDN: supported (requires outbound internet at render time)
+   * WEASYPRINT CONSTRAINTS STRICTLY OBSERVED:
+   *   ✗ No CSS Grid
+   *   ✗ No -webkit-background-clip: text  (wordmark uses color: not gradient text)
+   *   ✗ No border-image
+   *   ✗ No canvas / JavaScript
+   *   ✓ Flex layouts throughout
+   *   ✓ Inline SVG for all charts (pre-rendered in pdf_export.py)
+   *   ✓ Google Fonts via @import CDN
+   *   ✓ @page running headers/footers
+   *   ✓ page-break-before / page-break-inside: avoid
    */
 
   @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Open+Sans:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
-  /* ── PAGE SETUP ─────────────────────────────────────────────────────────── */
+  /* ══ PAGE SETUP ═══════════════════════════════════════════════════════════ */
 
   @page {
     size: A4 landscape;
@@ -44,12 +46,13 @@
     }
   }
 
+  /* Cover page — no footer (handled by doc-footer div) */
   @page :first {
     @bottom-left  { content: ""; }
     @bottom-right { content: ""; }
   }
 
-  /* ── BRAND TOKENS ───────────────────────────────────────────────────────── */
+  /* ══ BRAND TOKENS ═════════════════════════════════════════════════════════ */
 
   :root {
     --sk-cyan:   #1EC8D4;
@@ -65,34 +68,35 @@
     --sk-warn:   #D97706;
     --sk-fail:   #DC2626;
     --sk-info:   #2563EB;
-    --grad:      linear-gradient(to right, #1EC8D4, #4A6FE8, #2A4DCC);
+    --grad:      linear-gradient(135deg, #1EC8D4, #4A6FE8, #2A4DCC);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 8.5pt;
+    font-size: 8pt;
     color: var(--sk-text);
-    background: var(--sk-bg);
+    background: #FFFFFF;
     line-height: 1.5;
   }
 
-  /* ── DOCUMENT HEADER ────────────────────────────────────────────────────── */
+  /* ══ DOCUMENT HEADER (shared across pages via repeat) ═════════════════════ */
 
   .doc-header {
     background: var(--sk-header);
-    padding: 16px 20px 14px;
+    padding: 14px 18px 12px;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    border-radius: 6px 6px 0 0;
+    border-radius: 5px 5px 0 0;
     page-break-inside: avoid;
   }
 
+  /* WeasyPrint: no gradient text. Use flat brand cyan on dark bg. */
   .wordmark {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 24pt;
+    font-size: 22pt;
     font-weight: 900;
     color: var(--sk-cyan);
     letter-spacing: -0.5px;
@@ -101,68 +105,67 @@
 
   .wordmark-tier {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 7.5pt;
+    font-size: 7pt;
     color: #8896A7;
     margin-top: 3px;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.3px;
   }
 
   .doc-meta {
     text-align: right;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 7.5pt;
+    font-size: 7pt;
     color: #8896A7;
     line-height: 1.9;
   }
 
   .doc-meta strong { color: #E2E8F0; }
 
+  /* Brand gradient strip under header */
   .grad-strip {
-    height: 4px;
+    height: 3px;
     background: var(--grad);
-    margin-bottom: 16px;
+    margin-bottom: 14px;
   }
 
-  /* ── SECTION HEADERS ────────────────────────────────────────────────────── */
+  /* ══ SECTION LABEL ════════════════════════════════════════════════════════ */
 
   .section-title {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 9pt;
+    font-size: 8pt;
     font-weight: 700;
     color: var(--sk-text);
     text-transform: uppercase;
     letter-spacing: 0.07em;
     padding-bottom: 5px;
     border-bottom: 2px solid var(--sk-border);
-    margin-bottom: 10px;
+    margin-bottom: 9px;
   }
 
   .section-pip {
     display: inline-block;
     width: 4px;
-    height: 11px;
+    height: 10px;
     background: var(--sk-cyan);
     border-radius: 2px;
-    margin-right: 8px;
+    margin-right: 7px;
     vertical-align: middle;
   }
 
-  .page-section {
-    page-break-before: always;
-    margin-bottom: 16px;
-  }
+  /* page-break wrapper for all sections after Page 1 */
+  .page-break { page-break-before: always; }
 
-  /* ── ① COVER: GRADE RING + STAT TILES ──────────────────────────────────── */
+  /* ══ GRADE RING + STAT TILES (Page 1 top row) ════════════════════════════ */
 
   .summary-row {
     display: flex;
     gap: 10px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
     page-break-inside: avoid;
   }
 
   .grade-cell {
-    flex: 0 0 110px;
+    flex: 0 0 100px;
     background: var(--sk-card);
     border: 1px solid var(--sk-border);
     border-radius: 8px;
@@ -170,26 +173,26 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 12px 8px;
+    padding: 10px 6px;
   }
 
   .grade-letter {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 36pt;
+    font-size: 34pt;
     font-weight: 900;
     line-height: 1;
   }
 
   .grade-score {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 10pt;
+    font-size: 9pt;
     font-weight: 500;
     margin-top: 2px;
   }
 
   .grade-label {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 6.5pt;
+    font-size: 6pt;
     color: var(--sk-muted);
     margin-top: 4px;
     text-transform: uppercase;
@@ -199,22 +202,22 @@
   .stat-tiles {
     flex: 1;
     display: flex;
-    gap: 8px;
+    gap: 6px;
     flex-wrap: wrap;
   }
 
   .stat-tile {
-    flex: 1 1 75px;
+    flex: 1 1 68px;
     background: var(--sk-card);
     border: 1px solid var(--sk-border);
-    border-radius: 6px;
-    padding: 8px 10px 7px;
-    min-width: 65px;
+    border-radius: 5px;
+    padding: 7px 8px 6px;
+    min-width: 60px;
   }
 
   .stat-value {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 14pt;
+    font-size: 13pt;
     font-weight: 500;
     color: var(--sk-text);
     line-height: 1.1;
@@ -223,36 +226,42 @@
 
   .stat-label {
     font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 6.5pt;
+    font-size: 6pt;
     color: var(--sk-muted);
     margin-top: 2px;
     line-height: 1.3;
   }
 
-  /* ── ① COVER: CHECKS TABLE + SIDEBAR ───────────────────────────────────── */
+  /* ══ TWO-COLUMN LAYOUT (Page 1: checks left, spider right) ═══════════════ */
 
   .two-col {
     display: flex;
-    gap: 14px;
-    margin-bottom: 16px;
+    gap: 12px;
+    margin-bottom: 12px;
+    align-items: flex-start;
   }
 
-  .two-col-main { flex: 2; }
-  .two-col-side  { flex: 1; min-width: 140px; }
+  /* checks table column: takes ~64% of width */
+  .two-col-main { flex: 3 1 0; min-width: 0; }
+
+  /* spider chart column: fixed 260px matching SVG width */
+  .two-col-side  { flex: 0 0 264px; }
+
+  /* ══ DCMA CHECKS TABLE ════════════════════════════════════════════════════ */
 
   .checks-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 7.5pt;
+    font-size: 7pt;
   }
 
   .checks-table thead th {
     background: var(--sk-header);
     color: #E2E8F0;
-    padding: 6px 7px;
+    padding: 5px 6px;
     text-align: left;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 6.5pt;
+    font-size: 6pt;
     text-transform: uppercase;
     letter-spacing: 0.07em;
     font-weight: 400;
@@ -263,7 +272,7 @@
   .checks-table tbody tr:nth-child(even) td { background: #FAFBFF; }
 
   .checks-table tbody td {
-    padding: 5px 7px;
+    padding: 4px 6px;
     border-bottom: 1px solid var(--sk-border);
     vertical-align: middle;
   }
@@ -273,13 +282,13 @@
   .check-status-cell {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     white-space: nowrap;
   }
 
   .status-dot {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
     display: inline-block;
@@ -290,37 +299,49 @@
   .status-fail { background: var(--sk-fail); }
   .status-info { background: var(--sk-info); }
 
-  .text-pass { color: var(--sk-pass); font-weight: 600; }
-  .text-warn { color: var(--sk-warn); font-weight: 600; }
-  .text-fail { color: var(--sk-fail); font-weight: 600; }
-  .text-info { color: var(--sk-info); font-weight: 600; }
+  .text-pass { color: var(--sk-pass); font-weight: 600; font-size: 6.5pt; }
+  .text-warn { color: var(--sk-warn); font-weight: 600; font-size: 6.5pt; }
+  .text-fail { color: var(--sk-fail); font-weight: 600; font-size: 6.5pt; }
+  .text-info { color: var(--sk-info); font-weight: 600; font-size: 6.5pt; }
 
   .dcma-badge {
     display: inline-block;
     background: #EFF6FF;
     color: var(--sk-info);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 6pt;
+    font-size: 5.5pt;
     font-weight: 500;
-    padding: 1px 5px;
+    padding: 1px 4px;
     border-radius: 3px;
     white-space: nowrap;
   }
 
-  .metric-mono {
+  .extra-badge {
+    display: inline-block;
+    background: #F3F4F6;
+    color: #9CA3AF;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 7pt;
+    font-size: 5.5pt;
+    font-weight: 500;
+    padding: 1px 4px;
+    border-radius: 3px;
   }
 
+  .metric-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+  }
+
+  /* Score mini bar */
   .score-bar-wrap {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     justify-content: flex-end;
   }
 
   .score-bar-bg {
-    width: 44px;
+    width: 38px;
     height: 5px;
     background: var(--sk-border);
     border-radius: 3px;
@@ -334,386 +355,505 @@
 
   .score-text {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 7pt;
+    font-size: 6.5pt;
     color: var(--sk-muted);
-    min-width: 24px;
+    min-width: 22px;
     text-align: right;
   }
 
-  /* Sidebar cards */
-  .summary-card {
+  /* ══ SPIDER CHART SIDEBAR ═════════════════════════════════════════════════ */
+
+  .spider-card {
     background: var(--sk-card);
     border: 1px solid var(--sk-border);
     border-radius: 6px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
+    padding: 10px;
     page-break-inside: avoid;
   }
 
-  .summary-card-title {
+  .spider-title {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 7pt;
+    font-size: 7.5pt;
     font-weight: 700;
     color: var(--sk-muted);
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    margin-bottom: 7px;
+    margin-bottom: 8px;
   }
 
-  .kv-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 2px 0;
-    border-bottom: 1px solid #F3F4F6;
-    font-size: 7.5pt;
-  }
+  /* ══ ACTIONS REQUIRED (full width below two-col) ═════════════════════════ */
 
-  .kv-row:last-child { border-bottom: none; }
-  .kv-key { color: var(--sk-muted); }
-
-  .kv-val {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 7pt;
-    color: var(--sk-text);
-    font-weight: 500;
-  }
-
-  .result-counts {
-    display: flex;
-    gap: 5px;
-    margin-top: 5px;
-  }
-
-  .result-pill {
-    flex: 1;
-    text-align: center;
-    padding: 5px 4px;
+  .actions-block {
+    background: #FFFBEB;
+    border-left: 4px solid var(--sk-warn);
     border-radius: 5px;
-    font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 12pt;
-    font-weight: 900;
-    line-height: 1;
+    padding: 10px 14px;
+    /* No page-break-inside: avoid — must allow overflow if many fails */
   }
 
-  .result-pill-label {
-    font-family: 'Open Sans', Arial, sans-serif;
-    font-size: 6pt;
-    font-weight: 600;
-    margin-top: 2px;
+  .actions-title {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 7.5pt;
+    font-weight: 700;
+    color: #78350F;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    display: block;
+    margin-bottom: 8px;
+  }
+
+  .action-row {
+    display: flex;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid #FDE68A;
+    font-size: 7.5pt;
+    color: #78350F;
+    align-items: flex-start;
+  }
+
+  .action-row:last-child { border-bottom: none; }
+
+  .action-check-name {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 7pt;
+    flex: 0 0 140px;
+    color: #92400E;
+  }
+
+  .action-rec {
+    flex: 1;
+    line-height: 1.55;
+    color: #78350F;
+  }
+
+  /* No failing checks state */
+  .all-pass-block {
+    background: #F0FDF4;
+    border-left: 4px solid var(--sk-pass);
+    border-radius: 5px;
+    padding: 10px 14px;
+    font-size: 7.5pt;
+    color: #14532D;
+    page-break-inside: avoid;
+  }
+
+  /* ══ PAGE 1 FOOTER ════════════════════════════════════════════════════════ */
+
+  .doc-footer {
+    margin-top: 12px;
+    padding-top: 6px;
+    border-top: 1px solid var(--sk-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6pt;
+    color: var(--sk-muted);
+  }
+
+  /* ══ HELIOS PAGE (Page 2) ══════════════════════════════════════════════════ */
+
+  .helios-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--sk-border);
+  }
+
+  .helios-badge {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--grad);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #FFFFFF;
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 900;
+    font-size: 12pt;
+    flex-shrink: 0;
+  }
+
+  .helios-heading {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 14pt;
+    color: var(--sk-text);
+  }
+
+  .helios-sub {
+    font-size: 7pt;
+    color: var(--sk-muted);
+  }
+
+  /* Individual Helios insight blocks */
+  .insight-block {
+    border-radius: 5px;
+    padding: 12px 15px;
+    margin-bottom: 16px;
+    page-break-inside: avoid;
+  }
+
+  .insight-block-health {
+    background: #F7F8FC;
+    border: 1px solid var(--sk-border);
+    border-left: 4px solid var(--sk-cyan);
+  }
+
+  .insight-block-baseline {
+    background: #F7F8FC;
+    border: 1px solid var(--sk-border);
+    border-left: 4px solid var(--sk-peri);
+  }
+
+  .insight-block-forensic {
+    background: #FFF9F9;
+    border: 1px solid #FECACA;
+    border-left: 4px solid var(--sk-fail);
+  }
+
+  .insight-label {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 8.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 8px;
+  }
+
+  .insight-label-health    { color: var(--sk-cyan); }
+  .insight-label-baseline  { color: var(--sk-peri); }
+  .insight-label-forensic  { color: var(--sk-fail); }
+
+  .insight-content-line {
+    font-size: 8pt;
+    color: #374151;
+    line-height: 1.65;
+    margin-bottom: 2px;
+  }
+
+  .insight-heading-line {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 8.5pt;
+    color: var(--sk-text);
+    margin-top: 8px;
+    margin-bottom: 3px;
+  }
+
+  .insight-spacer { height: 5px; }
+
+  .insight-footer {
+    margin-top: 8px;
+    padding-top: 7px;
+    border-top: 1px solid var(--sk-border);
+    font-size: 6pt;
+    color: #9CA3AF;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .helios-disclaimer {
+    font-size: 6pt;
+    color: #9CA3AF;
+    font-family: 'Open Sans', Arial, sans-serif;
+    border-top: 1px solid var(--sk-border);
+    padding-top: 7px;
+    line-height: 1.5;
+  }
+
+  /* ══ PER-CHECK DETAIL PAGES ═══════════════════════════════════════════════ */
+
+  /* Header strip for each check page */
+  .check-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--sk-border);
+    page-break-inside: avoid;
+  }
+
+  .check-page-title {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 16pt;
+    font-weight: 900;
+    color: var(--sk-text);
+    line-height: 1.1;
+  }
+
+  .check-page-badges {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 5px;
+    flex-wrap: wrap;
+  }
+
+  .check-dcma-badge {
+    display: inline-block;
+    background: #EFF6FF;
+    color: var(--sk-info);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7pt;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+
+  .check-status-pill {
+    display: inline-block;
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 7pt;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
   .pill-pass { background: #F0FDF4; color: var(--sk-pass); }
   .pill-warn { background: #FFFBEB; color: var(--sk-warn); }
   .pill-fail { background: #FEF2F2; color: var(--sk-fail); }
+  .pill-info { background: #EFF6FF; color: var(--sk-info); }
 
-  /* Callout */
-  .callout {
-    border-radius: 5px;
-    padding: 8px 11px;
-    margin: 7px 0;
-    font-size: 7.5pt;
+  /* Metric row: current value · threshold · flagged · score */
+  .check-metric-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
     page-break-inside: avoid;
   }
 
-  .callout-warn { background: #FFFBEB; border-left: 4px solid var(--sk-warn); color: #78350F; }
-  .callout-info { background: #EFF6FF; border-left: 4px solid var(--sk-info); color: #1E3A8A; }
-  .callout-pass { background: #F0FDF4; border-left: 4px solid var(--sk-pass); color: #14532D; }
-
-  .rec-list {
-    margin: 0;
-    padding-left: 14px;
-    font-size: 7pt;
-    color: var(--sk-text);
-    line-height: 1.7;
+  .check-metric-box {
+    background: var(--sk-bg);
+    border: 1px solid var(--sk-border);
+    border-radius: 5px;
+    padding: 7px 10px;
+    min-width: 80px;
   }
 
-  /* ── ② SCHEDULE TABLE ───────────────────────────────────────────────────── */
-
-  .schedule-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 7pt;
-  }
-
-  .schedule-table thead th {
-    background: var(--sk-header);
-    color: #E2E8F0;
-    padding: 5px 6px;
-    text-align: left;
-    font-family: 'JetBrains Mono', monospace;
+  .check-metric-label {
+    font-family: 'Open Sans', Arial, sans-serif;
     font-size: 6pt;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    font-weight: 400;
-  }
-
-  .schedule-table thead th.right { text-align: right; }
-  .schedule-table thead th.center { text-align: center; }
-
-  .schedule-table tbody tr:nth-child(even) td { background: #FAFBFF; }
-
-  .schedule-table tbody td {
-    padding: 3px 6px;
-    border-bottom: 1px solid var(--sk-border);
-    vertical-align: middle;
-    overflow: hidden;
-  }
-
-  /* WBS band row in schedule table */
-  .wbs-row td {
-    background: #EEF2FF !important;
-    font-family: 'Montserrat', Arial, sans-serif;
-    font-weight: 700;
-    font-size: 7pt;
-    color: var(--sk-peri);
-    padding: 3px 6px;
-    border-bottom: 1px solid #C7D2FE;
-  }
-
-  .wbs-indent {
-    display: inline-block;
-  }
-
-  /* Critical row highlight */
-  .crit-row td {
-    background: #FFF5F5 !important;
-  }
-
-  /* Complete row dim */
-  .done-row td {
-    color: var(--sk-muted) !important;
-  }
-
-  .status-dot-sm {
-    display: inline-block;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    vertical-align: middle;
-    margin-right: 3px;
-  }
-
-  .milestone-sym {
-    color: var(--sk-peri);
-    font-size: 6pt;
-    margin-right: 2px;
-  }
-
-  /* ── ③ CRITICAL PATH TABLE ──────────────────────────────────────────────── */
-
-  .path-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 7pt;
-  }
-
-  .path-table thead th {
-    background: var(--sk-header);
-    color: #E2E8F0;
-    padding: 5px 7px;
-    text-align: left;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 6pt;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    font-weight: 400;
-  }
-
-  .path-table thead th:last-child { text-align: right; }
-
-  .path-table tbody tr:nth-child(even) td { background: #FAFBFF; }
-
-  .path-table tbody td {
-    padding: 4px 7px;
-    border-bottom: 1px solid var(--sk-border);
-    vertical-align: middle;
-  }
-
-  .path-table td:last-child { text-align: right; }
-
-  .critical-row td { background: #FFF5F5 !important; }
-
-  .milestone-marker {
-    font-size: 6.5pt;
-    color: var(--sk-peri);
-    font-family: 'JetBrains Mono', monospace;
-  }
-
-  /* ── ④ ANALYTICS ────────────────────────────────────────────────────────── */
-
-  /* Float histogram bars — inline block widths driven by inline style */
-  .histogram-wrap {
-    margin-top: 8px;
-  }
-
-  .hist-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 5px;
-  }
-
-  .hist-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 6.5pt;
     color: var(--sk-muted);
-    width: 72px;
-    flex-shrink: 0;
-    text-align: right;
-    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
   }
 
-  .hist-bar-bg {
-    flex: 1;
-    height: 14px;
-    background: var(--sk-border);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .hist-bar-fill {
-    height: 100%;
-    border-radius: 3px;
-  }
-
-  .hist-count {
+  .check-metric-value {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 6.5pt;
+    font-size: 13pt;
+    font-weight: 500;
     color: var(--sk-text);
-    width: 32px;
-    flex-shrink: 0;
-    text-align: right;
+    line-height: 1.1;
   }
 
-  /* Analytics two-column layout */
-  .analytics-grid {
-    display: flex;
-    gap: 14px;
-  }
-
-  .analytics-col {
-    flex: 1;
-  }
-
-  .analytics-card {
+  /* Description / recommendation blocks */
+  .check-text-block {
     background: var(--sk-card);
     border: 1px solid var(--sk-border);
-    border-radius: 6px;
-    padding: 12px 14px;
-    margin-bottom: 12px;
+    border-radius: 5px;
+    padding: 9px 12px;
+    margin-bottom: 10px;
+    font-size: 8pt;
+    line-height: 1.65;
     page-break-inside: avoid;
   }
 
-  .analytics-card-title {
+  .check-text-label {
     font-family: 'Montserrat', Arial, sans-serif;
-    font-size: 8pt;
     font-weight: 700;
-    color: var(--sk-text);
+    font-size: 7pt;
+    color: var(--sk-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+
+  /* Graphic card */
+  .check-graphic-card {
+    background: var(--sk-card);
+    border: 1px solid var(--sk-border);
+    border-radius: 5px;
+    padding: 10px 12px;
     margin-bottom: 10px;
+    page-break-inside: avoid;
   }
 
-  /* Relationship type bar */
-  .rel-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
-  }
-
-  .rel-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 7pt;
-    color: var(--sk-muted);
-    width: 32px;
-    flex-shrink: 0;
-  }
-
-  .rel-bar-bg {
-    flex: 1;
-    height: 12px;
-    background: var(--sk-border);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-
-  .rel-bar-fill {
-    height: 100%;
-    background: var(--sk-peri);
-    border-radius: 3px;
-  }
-
-  .rel-count {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 7pt;
+  .check-graphic-title {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 7.5pt;
     color: var(--sk-text);
-    width: 36px;
-    flex-shrink: 0;
-    text-align: right;
+    margin-bottom: 8px;
   }
 
-  .rel-pct {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 6.5pt;
-    color: var(--sk-muted);
-    width: 30px;
-    flex-shrink: 0;
-    text-align: right;
-  }
-
-  /* Bottleneck table */
-  .bottleneck-table {
+  /* Flagged activities table */
+  .flagged-table {
     width: 100%;
     border-collapse: collapse;
     font-size: 7pt;
   }
 
-  .bottleneck-table thead th {
-    background: var(--sk-bg);
-    color: var(--sk-muted);
-    padding: 5px 6px;
+  .flagged-table thead th {
+    background: var(--sk-header);
+    color: #E2E8F0;
+    padding: 4px 6px;
     text-align: left;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 6pt;
+    font-size: 5.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+  }
+
+  .flagged-table tbody tr:nth-child(even) td { background: #FAFBFF; }
+
+  .flagged-table tbody td {
+    padding: 3px 6px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+    font-size: 7pt;
+  }
+
+  .flagged-table td.mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 6.5pt;
+  }
+
+  .no-flagged {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 7.5pt;
+    color: var(--sk-pass);
+    padding: 8px;
+    text-align: center;
+    background: #F0FDF4;
+    border-radius: 4px;
+    margin-top: 4px;
+  }
+
+  /* Bottleneck table used inside check-graphic-card */
+  .bot-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 6.5pt;
+  }
+
+  .bot-table thead th {
+    background: var(--sk-bg);
+    color: var(--sk-muted);
+    padding: 4px 5px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 5.5pt;
     text-transform: uppercase;
     letter-spacing: 0.07em;
     font-weight: 400;
     border-bottom: 2px solid var(--sk-border);
   }
 
-  .bottleneck-table thead th.right { text-align: right; }
+  .bot-table thead th.right { text-align: right; }
 
-  .bottleneck-table tbody td {
-    padding: 4px 6px;
+  .bot-table tbody td {
+    padding: 3px 5px;
     border-bottom: 1px solid var(--sk-border);
     vertical-align: middle;
   }
 
-  .bottleneck-table tbody tr:nth-child(even) td { background: #FAFBFF; }
+  .bot-table tbody tr:nth-child(even) td { background: #FAFBFF; }
 
-  /* ── DOCUMENT FOOTER ────────────────────────────────────────────────────── */
+  /* ══ SCHEDULE TABLE PAGES ══════════════════════════════════════════════════ */
 
-  .doc-footer {
-    margin-top: 16px;
-    padding-top: 7px;
-    border-top: 1px solid var(--sk-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 6.5pt;
-    color: var(--sk-muted);
+  .scene-header-info {
+    background: #EFF6FF;
+    border-left: 4px solid var(--sk-info);
+    border-radius: 4px;
+    padding: 7px 10px;
+    margin-bottom: 10px;
+    font-size: 7.5pt;
+    color: #1E3A8A;
+    page-break-inside: avoid;
   }
+
+  /* Two-pane scene layout: table left, Gantt SVG right */
+  .scene-row-wrap {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--sk-border);
+  }
+
+  .scene-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 6.5pt;
+  }
+
+  .scene-table thead th {
+    background: var(--sk-header);
+    color: #E2E8F0;
+    padding: 4px 5px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 5.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+  }
+
+  .scene-table thead th.right { text-align: right; }
+
+  .scene-table tbody td {
+    padding: 2px 5px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+  }
+
+  .scene-table tbody tr:nth-child(even) td { background: #FAFBFF; }
+
+  .scene-table .wbs-row td {
+    background: #EEF2FF !important;
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 6.5pt;
+    color: var(--sk-peri);
+    padding: 3px 5px;
+    border-bottom: 1px solid #C7D2FE;
+  }
+
+  .scene-table .crit-row td { background: #FFF5F5 !important; }
+  .scene-table .done-row td { color: var(--sk-muted) !important; }
+
+  /* ══ CALLOUT SHARED ═══════════════════════════════════════════════════════ */
+
+  .callout {
+    border-radius: 4px;
+    padding: 7px 10px;
+    margin: 6px 0;
+    font-size: 7pt;
+    page-break-inside: avoid;
+  }
+
+  .callout-warn { background: #FFFBEB; border-left: 3px solid var(--sk-warn); color: #78350F; }
+  .callout-info { background: #EFF6FF; border-left: 3px solid var(--sk-info); color: #1E3A8A; }
+  .callout-pass { background: #F0FDF4; border-left: 3px solid var(--sk-pass); color: #14532D; }
 
 </style>
 </head>
 <body>
 
-<!-- ════════════════════════════════════════════════════════════════════════════
-     DOCUMENT HEADER
-════════════════════════════════════════════════════════════════════════════ -->
+
+{# ═══════════════════════════════════════════════════════════════════════════
+   PAGE 1 — COVER: HEADER · GRADE + STATS · CHECKS TABLE / SPIDER · ACTIONS
+═══════════════════════════════════════════════════════════════════════════ #}
+
+<!-- Document header -->
 <div class="doc-header">
   <div>
     <div class="wordmark">SKOPIA.</div>
@@ -728,9 +868,7 @@
 <div class="grad-strip"></div>
 
 
-<!-- ════════════════════════════════════════════════════════════════════════════
-     ① COVER — GRADE RING + STAT TILES
-════════════════════════════════════════════════════════════════════════════ -->
+<!-- Grade ring + stat tiles -->
 <div class="summary-row">
 
   <div class="grade-cell">
@@ -768,17 +906,25 @@
       <span class="stat-value">{{ summary_stats.calendars | format_num }}</span>
       <span class="stat-label">Calendars</span>
     </div>
+    {% if schedule_data %}
+    <div class="stat-tile">
+      <span class="stat-value" style="font-size:9pt;">{{ schedule_data.project_start | format_date }}</span>
+      <span class="stat-label">Project Start</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-value" style="font-size:9pt;">{{ schedule_data.project_finish | format_date }}</span>
+      <span class="stat-label">Project Finish</span>
+    </div>
+    {% endif %}
   </div>
 
 </div>
 
 
-<!-- ════════════════════════════════════════════════════════════════════════════
-     ① COVER — DCMA CHECKS TABLE + SIDEBAR
-════════════════════════════════════════════════════════════════════════════ -->
+<!-- Two-column: checks table (left) | spider chart (right) -->
 <div class="two-col">
 
-  <!-- Checks table -->
+  <!-- DCMA Checks table -->
   <div class="two-col-main">
     <div class="section-title">
       <span class="section-pip"></span>DCMA Health Checks
@@ -787,37 +933,47 @@
     <table class="checks-table">
       <thead>
         <tr>
-          <th style="width:10%">Ref</th>
-          <th style="width:24%">Check</th>
-          <th style="width:12%">Status</th>
-          <th style="width:20%">Metric</th>
+          <th style="width:9%">Ref</th>
+          <th style="width:24%">Check Name</th>
+          <th style="width:11%">Status</th>
+          <th style="width:17%">Metric</th>
           <th style="width:10%">Threshold</th>
-          <th style="width:8%">Flagged</th>
-          <th style="width:16%">Score</th>
+          <th style="width:9%">Flagged</th>
+          <th style="width:20%">Score</th>
         </tr>
       </thead>
       <tbody>
         {% for check in checks %}
         <tr>
+
+          {# DCMA ref badge #}
           <td>
             {% if check.dcma_ref %}
               <span class="dcma-badge">{{ check.dcma_ref }}</span>
             {% else %}
-              <span class="dcma-badge" style="background:#F3F4F6;color:#9CA3AF;">Extra</span>
+              <span class="extra-badge">Extra</span>
             {% endif %}
           </td>
-          <td style="font-weight:600;">{{ check.check_name }}</td>
+
+          {# Check name #}
+          <td style="font-weight:600;font-size:7pt;">{{ check.check_name }}</td>
+
+          {# Status dot + label #}
           <td>
             <div class="check-status-cell">
               <span class="status-dot status-{{ check.status }}"></span>
               <span class="text-{{ check.status }}">{{ check.status | upper }}</span>
             </div>
           </td>
+
+          {# Metric value #}
           <td>
             <span class="metric-mono">
               {{ check.metric_value | format_metric(check.metric_label) }}
             </span>
           </td>
+
+          {# Threshold #}
           <td>
             {% if check.threshold_value is not none %}
               <span class="metric-mono">
@@ -828,15 +984,19 @@
               <span style="color:var(--sk-muted);">—</span>
             {% endif %}
           </td>
+
+          {# Flagged count #}
           <td style="text-align:right;">
             {% if check.flagged_count > 0 %}
-              <span style="color:var(--sk-fail);font-family:'JetBrains Mono',monospace;font-weight:600;">
-                {{ check.flagged_count }}
+              <span style="color:var(--sk-fail);font-family:'JetBrains Mono',monospace;font-weight:600;font-size:7pt;">
+                {{ check.flagged_count | format_num }}
               </span>
             {% else %}
-              <span style="color:var(--sk-pass);font-family:'JetBrains Mono',monospace;">0</span>
+              <span style="color:var(--sk-pass);font-family:'JetBrains Mono',monospace;font-size:7pt;">0</span>
             {% endif %}
           </td>
+
+          {# Score bar #}
           <td>
             <div class="score-bar-wrap">
               <div class="score-bar-bg">
@@ -847,88 +1007,98 @@
               <span class="score-text">{{ check.normalised_score | int }}</span>
             </div>
           </td>
+
         </tr>
         {% endfor %}
       </tbody>
     </table>
-  </div>
 
-  <!-- Sidebar -->
-  <div class="two-col-side">
-
-    <!-- Pass/warn/fail pills -->
-    <div class="summary-card">
-      <div class="summary-card-title">Check Results</div>
-      <div class="result-counts">
-        <div class="result-pill pill-pass">
-          {{ pass_count }}
-          <span class="result-pill-label">Pass</span>
-        </div>
-        <div class="result-pill pill-warn">
-          {{ warn_count }}
-          <span class="result-pill-label">Warn</span>
-        </div>
-        <div class="result-pill pill-fail">
-          {{ fail_count }}
-          <span class="result-pill-label">Fail</span>
-        </div>
+    <!-- Pass/warn/fail summary pills below table -->
+    <div style="display:flex;gap:6px;margin-top:8px;">
+      <div style="flex:0 0 auto;background:#F0FDF4;border-radius:5px;padding:5px 10px;
+                  font-family:'Montserrat',Arial,sans-serif;font-size:11pt;font-weight:900;
+                  color:var(--sk-pass);text-align:center;">
+        {{ pass_count }}
+        <div style="font-family:'Open Sans',Arial,sans-serif;font-size:6pt;
+                    font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-top:1px;">Pass</div>
+      </div>
+      <div style="flex:0 0 auto;background:#FFFBEB;border-radius:5px;padding:5px 10px;
+                  font-family:'Montserrat',Arial,sans-serif;font-size:11pt;font-weight:900;
+                  color:var(--sk-warn);text-align:center;">
+        {{ warn_count }}
+        <div style="font-family:'Open Sans',Arial,sans-serif;font-size:6pt;
+                    font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-top:1px;">Warn</div>
+      </div>
+      <div style="flex:0 0 auto;background:#FEF2F2;border-radius:5px;padding:5px 10px;
+                  font-family:'Montserrat',Arial,sans-serif;font-size:11pt;font-weight:900;
+                  color:var(--sk-fail);text-align:center;">
+        {{ fail_count }}
+        <div style="font-family:'Open Sans',Arial,sans-serif;font-size:6pt;
+                    font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-top:1px;">Fail</div>
       </div>
     </div>
 
-    <!-- Project details -->
-    <div class="summary-card">
-      <div class="summary-card-title">Project Details</div>
-      {% if schedule_data %}
-        <div class="kv-row">
-          <span class="kv-key">Start</span>
-          <span class="kv-val">{{ schedule_data.project_start | format_date }}</span>
-        </div>
-        <div class="kv-row">
-          <span class="kv-key">Finish</span>
-          <span class="kv-val">{{ schedule_data.project_finish | format_date }}</span>
+  </div>{# /two-col-main #}
+
+  <!-- Spider chart -->
+  <div class="two-col-side">
+    <div class="spider-card">
+      <div class="spider-title">Health Profile</div>
+      {% if spider_svg %}
+        {{ spider_svg | safe }}
+      {% else %}
+        <div style="color:var(--sk-muted);font-size:7pt;padding:20px 0;text-align:center;">
+          Chart unavailable — fewer than 3 checks
         </div>
       {% endif %}
-      <div class="kv-row">
-        <span class="kv-key">In Progress</span>
-        <span class="kv-val">{{ summary_stats.in_progress_tasks }}</span>
-      </div>
-      <div class="kv-row">
-        <span class="kv-key">LOE Tasks</span>
-        <span class="kv-val">{{ summary_stats.loe_activities }}</span>
-      </div>
-      <div class="kv-row">
-        <span class="kv-key">Float — Mean</span>
-        <span class="kv-val">{{ float_histogram.mean_float_days | round(1) }}d</span>
-      </div>
-      <div class="kv-row">
-        <span class="kv-key">Float — Median</span>
-        <span class="kv-val">{{ float_histogram.median_float_days | round(1) }}d</span>
+      {# Legend row #}
+      <div style="display:flex;gap:8px;margin-top:6px;font-size:6pt;
+                  color:var(--sk-muted);font-family:'Open Sans',Arial,sans-serif;
+                  justify-content:center;flex-wrap:wrap;">
+        <span style="display:flex;align-items:center;gap:3px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--sk-pass);display:inline-block;"></span>Pass
+        </span>
+        <span style="display:flex;align-items:center;gap:3px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--sk-warn);display:inline-block;"></span>Warn
+        </span>
+        <span style="display:flex;align-items:center;gap:3px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--sk-fail);display:inline-block;"></span>Fail
+        </span>
+        <span style="display:flex;align-items:center;gap:3px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--sk-info);display:inline-block;"></span>Info
+        </span>
       </div>
     </div>
-
-    <!-- Action required -->
-    {% set failing = checks | selectattr('status', 'equalto', 'fail') | list %}
-    {% if failing %}
-    <div class="callout callout-warn">
-      <strong style="font-size:7pt;text-transform:uppercase;letter-spacing:0.05em;">
-        Action Required
-      </strong>
-      <ul class="rec-list" style="margin-top:4px;">
-        {% for c in failing[:5] %}
-          <li>{{ c.check_name }}: {{ c.recommendation | truncate(75) }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-    {% else %}
-    <div class="callout callout-pass">
-      <strong style="font-size:7pt;">All checks passed.</strong>
-      This schedule meets DCMA quality standards.
-    </div>
-    {% endif %}
-
   </div>
 
-</div><!-- /two-col -->
+</div>{# /two-col #}
+
+
+<!-- Actions Required — full width, below two-col -->
+{% set failing_or_warning = checks | selectattr('status', 'in', ['fail', 'warn']) | list %}
+{% if failing_or_warning %}
+<div class="actions-block">
+  <div class="actions-title">Actions Required</div>
+  {% for c in failing_or_warning %}
+    {% if c.recommendation %}
+    <div class="action-row">
+      <div class="action-check-name">
+        {% if c.dcma_ref %}<span style="font-family:'JetBrains Mono',monospace;font-size:6pt;
+          color:var(--sk-info);font-weight:400;">{{ c.dcma_ref }}&nbsp;·&nbsp;</span>{% endif %}
+        {{ c.check_name }}
+      </div>
+      <div class="action-rec">{{ c.recommendation }}</div>
+    </div>
+    {% endif %}
+  {% endfor %}
+</div>
+{% else %}
+<div class="all-pass-block">
+  <strong>All checks passed.</strong>
+  This schedule meets DCMA quality standards across all assessed criteria.
+</div>
+{% endif %}
+
 
 <!-- Page 1 footer -->
 <div class="doc-footer">
@@ -937,126 +1107,461 @@
 </div>
 
 
-<!-- ════════════════════════════════════════════════════════════════════════════
-     ② SCHEDULE — FULL ACTIVITY TABLE
-     One row per activity, grouped by WBS band.
-     Columns: ID · Name · Rem Dur · Start · Finish · Total Float · Status
-════════════════════════════════════════════════════════════════════════════ -->
-{% if schedule_data and schedule_data.activities %}
+{# ═══════════════════════════════════════════════════════════════════════════
+   PAGE 2 — HELIOS AI INSIGHTS (conditional — skip entirely if no insights)
+═══════════════════════════════════════════════════════════════════════════ #}
+{% if helios_insights and (helios_insights.health or helios_insights.baseline or helios_insights.forensic) %}
+<div class="page-break">
 
-<div class="page-section">
+  <!-- Helios section header -->
+  <div class="helios-header">
+    <div class="helios-badge">H</div>
+    <div>
+      <div class="helios-heading">Helios AI Insights</div>
+      <div class="helios-sub">AI-generated schedule analysis &nbsp;·&nbsp; SKOPIA Lens</div>
+    </div>
+  </div>
+
+  {# ── Helper macro: render markdown-ish content (** bold headings **) ── #}
+  {# WeasyPrint can't execute JS or use markdown — we parse line-by-line in Jinja2 #}
+
+  {% macro render_content(content) %}
+    {% set lines = content.split('\n') %}
+    {% for line in lines %}
+      {% set stripped = line.strip() %}
+      {% if stripped == '' %}
+        <div class="insight-spacer"></div>
+      {% elif stripped.startswith('##') %}
+        {# Section heading — strip ## #}
+        <div class="insight-heading-line">{{ stripped.lstrip('#').strip() }}</div>
+      {% elif stripped.startswith('**') and stripped.endswith('**') and stripped | length > 4 %}
+        {# Full-line bold — remove ** #}
+        <div class="insight-heading-line">{{ stripped[2:-2] }}</div>
+      {% elif '**' in stripped %}
+        {# Inline bold: render plain text (WeasyPrint can't parse sub-element Jinja easily) #}
+        <div class="insight-content-line">{{ stripped | replace('**', '') }}</div>
+      {% elif stripped.startswith('- ') or stripped.startswith('• ') %}
+        {# Bullet point #}
+        <div class="insight-content-line" style="padding-left:12px;">
+          &bull;&nbsp;{{ stripped[2:] }}
+        </div>
+      {% elif stripped.startswith('---') %}
+        <hr style="border:none;border-top:1px solid var(--sk-border);margin:6px 0;">
+      {% else %}
+        <div class="insight-content-line">{{ line }}</div>
+      {% endif %}
+    {% endfor %}
+  {% endmacro %}
+
+  {# Health Insights #}
+  {% if helios_insights.health %}
+  <div class="insight-block insight-block-health">
+    <div class="insight-label insight-label-health">Health Insights</div>
+    {{ render_content(helios_insights.health.content) }}
+    <div class="insight-footer">
+      Generated {{ helios_insights.health.generatedAt[:16] | replace('T', ' ') }}
+      &nbsp;·&nbsp; Helios AI &nbsp;·&nbsp; SKOPIA Lens
+    </div>
+  </div>
+  {% endif %}
+
+  {# Baseline Variance #}
+  {% if helios_insights.baseline %}
+  <div class="insight-block insight-block-baseline">
+    <div class="insight-label insight-label-baseline">Baseline Variance Analysis</div>
+    {{ render_content(helios_insights.baseline.content) }}
+    <div class="insight-footer">
+      Generated {{ helios_insights.baseline.generatedAt[:16] | replace('T', ' ') }}
+      &nbsp;·&nbsp; Helios AI &nbsp;·&nbsp; SKOPIA Lens
+    </div>
+  </div>
+  {% endif %}
+
+  {# Forensic Risk Analysis #}
+  {% if helios_insights.forensic %}
+  <div class="insight-block insight-block-forensic">
+    <div class="insight-label insight-label-forensic">&#9873; Forensic Risk Analysis</div>
+    {{ render_content(helios_insights.forensic.content) }}
+    <div class="insight-footer" style="border-top:1px solid #FECACA;">
+      Generated {{ helios_insights.forensic.generatedAt[:16] | replace('T', ' ') }}
+      &nbsp;·&nbsp; Helios AI &nbsp;·&nbsp; SKOPIA Lens &nbsp;·&nbsp; Forensic Analysis
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="helios-disclaimer">
+    AI-generated insights are based on schedule data only. Always verify findings against
+    the source schedule before making project decisions.
+    Helios &nbsp;·&nbsp; SKOPIA Lens &nbsp;·&nbsp; {{ generated_at }}
+  </div>
+
+</div>
+{% endif %}
+
+
+{# ═══════════════════════════════════════════════════════════════════════════
+   PAGES 3+ — PER-CHECK DETAIL PAGES
+   One page per check. Includes:
+     - Header: check name, DCMA badge, status pill
+     - Metric row: value, threshold, flagged count, normalised score
+     - Description paragraph
+     - Recommendation paragraph
+     - Optional graphic (SVG or bottleneck table) from check_graphics map
+     - Flagged activities table (or "no flagged" message)
+═══════════════════════════════════════════════════════════════════════════ #}
+
+{% for check in checks %}
+<div class="page-break">
+
+  {# ── Page header ── #}
+  <div class="check-page-header">
+    <div>
+      <div class="check-page-title">{{ check.check_name }}</div>
+      <div class="check-page-badges">
+        {% if check.dcma_ref %}
+          <span class="check-dcma-badge">{{ check.dcma_ref }}</span>
+        {% else %}
+          <span class="check-dcma-badge" style="background:#F3F4F6;color:#9CA3AF;">Additional Check</span>
+        {% endif %}
+        <span class="check-status-pill pill-{{ check.status }}">
+          {{ check.status | upper }}
+        </span>
+      </div>
+    </div>
+    {# Mini score ring — just a text badge, SVG ring is expensive per-page #}
+    <div style="text-align:right;">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:22pt;font-weight:500;
+                  color:{{ check.status | status_colour }};line-height:1;">
+        {{ check.normalised_score | int }}
+      </div>
+      <div style="font-size:6pt;color:var(--sk-muted);font-family:'Open Sans',Arial,sans-serif;">
+        Score / 100
+      </div>
+    </div>
+  </div>
+
+  {# ── Metric boxes ── #}
+  <div class="check-metric-row">
+
+    <div class="check-metric-box">
+      <div class="check-metric-label">Current Metric</div>
+      <div class="check-metric-value" style="color:{{ check.status | status_colour }};">
+        {{ check.metric_value | format_metric(check.metric_label) }}
+      </div>
+    </div>
+
+    <div class="check-metric-box">
+      <div class="check-metric-label">Threshold</div>
+      <div class="check-metric-value" style="font-size:13pt;">
+        {% if check.threshold_value is not none %}
+          {% if check.metric_label and '%' in check.metric_label %}≤{{ check.threshold_value }}%
+          {% else %}{{ check.threshold_value }}{% endif %}
+        {% else %}—{% endif %}
+      </div>
+    </div>
+
+    <div class="check-metric-box">
+      <div class="check-metric-label">Flagged Activities</div>
+      <div class="check-metric-value"
+           style="color:{% if check.flagged_count > 0 %}var(--sk-fail){% else %}var(--sk-pass){% endif %};">
+        {{ check.flagged_count | format_num }}
+      </div>
+    </div>
+
+    <div class="check-metric-box">
+      <div class="check-metric-label">Population</div>
+      <div class="check-metric-value">
+        {{ check.population_count | format_num if check.population_count is defined else '—' }}
+      </div>
+    </div>
+
+  </div>
+
+  {# ── Description ── #}
+  {% if check.description %}
+  <div class="check-text-block">
+    <div class="check-text-label">What this checks</div>
+    {{ check.description }}
+  </div>
+  {% endif %}
+
+  {# ── Recommendation ── #}
+  {% if check.recommendation %}
+  <div class="check-text-block" style="border-left:3px solid var(--sk-warn);">
+    <div class="check-text-label">Recommendation</div>
+    {{ check.recommendation }}
+  </div>
+  {% endif %}
+
+  {# ── Graphic — keyed by check_id ── #}
+  {% set graphic = check_graphics.get(check.check_id, '') %}
+
+  {% if graphic == '__table__' %}
+    {# Bottleneck activities: render as HTML table from network_metrics #}
+    {% if network_metrics and network_metrics.top_bottlenecks %}
+    <div class="check-graphic-card">
+      <div class="check-graphic-title">Top Schedule Bottlenecks (fan-in × fan-out score)</div>
+      <div class="callout callout-info" style="margin-bottom:8px;font-size:6.5pt;">
+        Activities with high fan-in AND fan-out are structural bottlenecks — any delay here
+        cascades through a large portion of the network. Zero-float bottlenecks are highest risk.
+      </div>
+      <table class="bot-table">
+        <thead>
+          <tr>
+            <th style="width:5%">#</th>
+            <th style="width:15%">ID</th>
+            <th style="width:32%">Activity Name</th>
+            <th style="width:11%" class="right">Fan In</th>
+            <th style="width:11%" class="right">Fan Out</th>
+            <th style="width:11%" class="right">Score</th>
+            <th style="width:10%" class="right">Float</th>
+            <th style="width:5%" class="right">Crit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for bot in network_metrics.top_bottlenecks[:10] %}
+          <tr>
+            <td style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:5.5pt;">
+              {{ loop.index }}
+            </td>
+            <td style="font-family:'JetBrains Mono',monospace;font-size:5.5pt;color:var(--sk-peri);">
+              {{ bot.id }}
+            </td>
+            <td style="font-size:6.5pt;">{{ bot.name | truncate(42) }}</td>
+            <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+              {{ bot.fan_in }}
+            </td>
+            <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+              {{ bot.fan_out }}
+            </td>
+            <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+                       font-weight:600;color:var(--sk-peri);">
+              {{ bot.score }}
+            </td>
+            <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+                       color:{% if bot.float_days is defined and bot.float_days <= 0 %}var(--sk-fail)
+                             {% else %}var(--sk-muted){% endif %};">
+              {% if bot.float_days is defined %}{{ bot.float_days }}d{% else %}—{% endif %}
+            </td>
+            <td style="text-align:right;">
+              {% if bot.is_critical %}
+                <span style="color:var(--sk-fail);font-weight:700;">●</span>
+              {% else %}
+                <span style="color:var(--sk-border);">○</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+  {% elif graphic %}
+    {# SVG pre-rendered in pdf_export.py — emit as safe HTML #}
+    <div class="check-graphic-card">
+      <div class="check-graphic-title">
+        {% if check.check_id == 'high_float' %}Float Distribution
+        {% elif check.check_id == 'logic_density' %}Fan-In / Fan-Out Distribution
+        {% elif check.check_id == 'relationship_types' %}Relationship Type Breakdown
+        {% else %}Check Analytics{% endif %}
+      </div>
+      {{ graphic | safe }}
+    </div>
+  {% endif %}
+
+  {# ── Flagged activities table ── #}
+  {% if check.flagged_items %}
+  <div style="margin-top:8px;">
+    <div class="section-title" style="font-size:7pt;margin-bottom:7px;">
+      <span class="section-pip"></span>Flagged Activities ({{ check.flagged_items | length | format_num }})
+    </div>
+    <table class="flagged-table">
+      <thead>
+        <tr>
+          <th style="width:18%">Activity ID</th>
+          <th style="width:38%">Activity Name</th>
+          <th style="width:18%">WBS</th>
+          <th style="width:26%">Issue / Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {# Show up to 50 rows per check page — very long lists would overflow #}
+        {% for item in check.flagged_items[:50] %}
+        <tr>
+          <td class="mono" style="color:var(--sk-peri);">{{ item.activity_id or item.id or '—' }}</td>
+          <td>{{ (item.activity_name or item.name or '—') | truncate(52) }}</td>
+          <td class="mono" style="color:var(--sk-muted);">
+            {{ (item.wbs or item.wbs_name or '—') | truncate(22) }}
+          </td>
+          <td class="mono">
+            {# Show the most relevant metric field depending on check type #}
+            {% if item.total_float is defined %}
+              <span style="color:{% if item.total_float < 0 %}var(--sk-fail)
+                           {% elif item.total_float == 0 %}var(--sk-warn)
+                           {% else %}var(--sk-muted){% endif %};">
+                {{ item.total_float }}d float
+              </span>
+            {% elif item.duration_days is defined %}
+              {{ item.duration_days }}d duration
+            {% elif item.lag_days is defined %}
+              lag: {{ item.lag_days }}d
+            {% elif item.constraint_type is defined %}
+              {{ item.constraint_type }}{% if item.constraint_date %} · {{ item.constraint_date | format_date }}{% endif %}
+            {% elif item.value is defined %}
+              {{ item.value }}
+            {% elif item.metric is defined %}
+              {{ item.metric }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        {% if check.flagged_items | length > 50 %}
+        <tr>
+          <td colspan="4" style="text-align:center;color:var(--sk-muted);font-size:6.5pt;
+                                  padding:5px;font-style:italic;">
+            … and {{ (check.flagged_items | length - 50) | format_num }} more.
+            Full detail available in the live dashboard.
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="no-flagged">
+    ✓ No flagged activities for this check.
+  </div>
+  {% endif %}
+
+</div>{# /page-break #}
+{% endfor %}{# /for check in checks #}
+
+
+{# ═══════════════════════════════════════════════════════════════════════════
+   PAGES N+ — SCHEDULE TABLE (conditional on scene_activities)
+   One activity per row. Gantt bar SVG pre-rendered per row in pdf_export.py.
+   WeasyPrint paginates the table rows automatically.
+═══════════════════════════════════════════════════════════════════════════ #}
+
+{% if scene_activities %}
+<div class="page-break">
+
   <div class="section-title">
-    <span class="section-pip"></span>② Schedule — Activity Listing
+    <span class="section-pip"></span>Schedule — Activity Table
   </div>
 
-  <div class="callout callout-info" style="margin-bottom:10px;">
-    <strong>{{ schedule_data.activities | length }} activities</strong> listed below,
-    sorted by WBS group. Critical activities are highlighted.
-    Dates reflect the current schedule (with CPM recalculation if applied).
+  <div class="scene-header-info">
+    <strong>{{ scene_activities | length | format_num }} activities</strong>
+    shown from the active Scene.
+    Critical activities are highlighted. Gantt bars scaled to project timescale.
+    {% if schedule_data %}
+      Project span: {{ schedule_data.project_start | format_date }} → {{ schedule_data.project_finish | format_date }}.
+    {% endif %}
   </div>
 
-  {% set activities = schedule_data.activities %}
-
-  {# Build WBS lookup: id → name #}
+  {# Build WBS name lookup from schedule_data #}
   {% set wbs_map = {} %}
-  {% if schedule_data.wbs_nodes %}
+  {% if schedule_data and schedule_data.wbs_nodes %}
     {% for w in schedule_data.wbs_nodes %}
       {% if wbs_map.update({w.id: w.name}) %}{% endif %}
     {% endfor %}
   {% endif %}
 
-  {# Group activities by their wbs id for banded display #}
-  {# WeasyPrint Jinja: build ordered list of (wbs_id, wbs_name, [activities]) #}
-  {# We iterate once to collect wbs order, then render band + rows #}
+  {# Track current WBS band for banded display #}
   {% set ns = namespace(current_wbs='__NONE__') %}
 
-  <table class="schedule-table">
+  {# Two-pane layout: table (left) + Gantt SVGs (right) #}
+  {# WeasyPrint doesn't support position:sticky; we use a fixed-width right column #}
+
+  <table class="scene-table">
     <thead>
       <tr>
-        <th style="width:14%">Activity ID</th>
-        <th style="width:32%">Activity Name</th>
-        <th style="width:7%" class="right">Rem Dur</th>
-        <th style="width:11%" class="center">Start</th>
-        <th style="width:11%" class="center">Finish</th>
-        <th style="width:8%" class="right">Total Float</th>
-        <th style="width:17%">Status</th>
+        <th style="width:13%">Activity ID</th>
+        <th style="width:26%">Activity Name</th>
+        <th style="width:9%" class="right">Duration</th>
+        <th style="width:10%">Start</th>
+        <th style="width:10%">Finish</th>
+        <th style="width:8%" class="right">Float</th>
+        <th style="width:10%">Status</th>
+        <th style="width:14%">Gantt</th>
       </tr>
     </thead>
     <tbody>
-      {% for act in activities %}
+      {% for act in scene_activities %}
 
-        {# Emit WBS band header when WBS changes #}
+        {# WBS band header row #}
         {% if act.wbs != ns.current_wbs %}
           {% set ns.current_wbs = act.wbs %}
           {% set band_name = wbs_map.get(act.wbs, act.wbs_name or act.wbs or '') %}
           <tr class="wbs-row">
-            <td colspan="7">
-              <span class="wbs-indent">▸ {{ band_name }}</span>
-            </td>
+            <td colspan="8">▸ {{ band_name | truncate(90) }}</td>
           </tr>
         {% endif %}
 
-        {# Determine row class #}
+        {# Determine row classes #}
         {% set is_critical = act.critical or (act.total_float is not none and act.total_float <= 0) %}
-        {% set is_complete = act.status == 'Complete' or act.pct == 100 %}
-        {% set is_mile = act.type == 'milestone' or act.rem_dur == 0 %}
+        {% set is_complete = act.status in ('Complete', 'completed') or act.pct == 100 %}
 
         <tr class="{% if is_critical and not is_complete %}crit-row{% elif is_complete %}done-row{% endif %}">
 
-          <!-- Activity ID -->
-          <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+          {# Activity ID #}
+          <td style="font-family:'JetBrains Mono',monospace;font-size:6pt;
                      color:{% if is_critical and not is_complete %}var(--sk-fail){% else %}var(--sk-peri){% endif %};">
             {{ act.id }}
           </td>
 
-          <!-- Activity Name -->
-          <td style="font-size:7pt;">
-            {% if is_mile %}
-              <span class="milestone-sym">◆</span>
+          {# Name #}
+          <td style="font-size:6.5pt;">
+            {% if act.type == 'milestone' or (act.rem_dur is not none and act.rem_dur == 0) %}
+              <span style="color:var(--sk-peri);font-size:6pt;">◆ </span>
             {% endif %}
-            {{ act.name | truncate(52) }}
+            {{ act.name | truncate(44) }}
           </td>
 
-          <!-- Remaining Duration -->
-          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;color:var(--sk-muted);">
-            {% if act.rem_dur is not none %}
-              {{ act.rem_dur }}d
-            {% else %}—{% endif %}
+          {# Duration #}
+          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6pt;
+                     color:var(--sk-muted);">
+            {% if act.orig_dur is not none %}{{ act.orig_dur }}d{% else %}—{% endif %}
           </td>
 
-          <!-- Start -->
-          <td style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+          {# Start #}
+          <td style="font-family:'JetBrains Mono',monospace;font-size:6pt;">
             {{ act.start | format_date }}
           </td>
 
-          <!-- Finish -->
-          <td style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
+          {# Finish #}
+          <td style="font-family:'JetBrains Mono',monospace;font-size:6pt;">
             {{ act.finish | format_date }}
           </td>
 
-          <!-- Total Float -->
-          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
+          {# Total float #}
+          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6pt;
                      color:{% if act.total_float is not none and act.total_float < 0 %}var(--sk-fail)
                            {% elif act.total_float is not none and act.total_float == 0 %}var(--sk-warn)
                            {% else %}var(--sk-muted){% endif %};">
             {% if act.total_float is not none %}{{ act.total_float }}d{% else %}—{% endif %}
           </td>
 
-          <!-- Status -->
-          <td>
+          {# Status indicator #}
+          <td style="font-size:6.5pt;">
             {% if is_complete %}
-              <span class="status-dot-sm" style="background:var(--sk-pass);"></span>
-              <span style="color:var(--sk-pass);font-size:7pt;">Complete</span>
-            {% elif act.status == 'In Progress' or act.pct > 0 %}
-              <span class="status-dot-sm" style="background:var(--sk-warn);"></span>
-              <span style="color:var(--sk-warn);font-size:7pt;">In Progress</span>
-              {% if act.pct %}<span style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6pt;"> {{ act.pct }}%</span>{% endif %}
+              <span style="color:var(--sk-pass);">✓ Done</span>
+            {% elif act.status == 'In Progress' or (act.pct is not none and act.pct > 0) %}
+              <span style="color:var(--sk-warn);">▶ In Progress</span>
             {% elif is_critical %}
-              <span class="status-dot-sm" style="background:var(--sk-fail);"></span>
-              <span style="color:var(--sk-fail);font-size:7pt;font-weight:600;">Critical</span>
+              <span style="color:var(--sk-fail);font-weight:600;">● Critical</span>
             {% else %}
-              <span class="status-dot-sm" style="background:#CBD5E1;"></span>
-              <span style="color:var(--sk-muted);font-size:7pt;">Not Started</span>
+              <span style="color:var(--sk-muted);">○ Not Started</span>
+            {% endif %}
+          </td>
+
+          {# Gantt bar — pre-rendered SVG from pdf_export.py #}
+          <td style="padding:1px 4px;">
+            {% if act._gantt_svg %}
+              {{ act._gantt_svg | safe }}
             {% endif %}
           </td>
 
@@ -1064,427 +1569,9 @@
       {% endfor %}
     </tbody>
   </table>
-</div>
-
-{% endif %}<!-- /schedule table -->
-
-
-<!-- ════════════════════════════════════════════════════════════════════════════
-     ③ CRITICAL PATH TRACE — LONGEST PATH
-════════════════════════════════════════════════════════════════════════════ -->
-{% if longest_path %}
-
-<div class="page-section">
-  <div class="section-title">
-    <span class="section-pip"></span>③ Critical Path — Longest Path Trace
-  </div>
-
-  <div class="callout callout-info" style="margin-bottom:10px;">
-    <strong>{{ longest_path | length }} activities</strong> on the longest driving path from
-    project start to finish.
-    Total duration: <strong>{{ longest_path | sum(attribute='duration_days') }} working days</strong>.
-    Activities with zero float are highlighted.
-  </div>
-
-  <table class="path-table">
-    <thead>
-      <tr>
-        <th style="width:4%">#</th>
-        <th style="width:14%">Activity ID</th>
-        <th style="width:40%">Activity Name</th>
-        <th style="width:13%">Start</th>
-        <th style="width:13%">Finish</th>
-        <th style="width:8%">Duration</th>
-        <th style="width:8%">Float</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for act in longest_path %}
-      <tr {% if act.float_days == 0 and not act.is_milestone %}class="critical-row"{% endif %}>
-        <td style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6pt;">
-          {{ loop.index }}
-        </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;">{{ act.id }}</td>
-        <td style="font-size:7pt;">
-          {% if act.is_milestone %}<span class="milestone-marker">◆ </span>{% endif %}
-          {{ act.name }}
-        </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
-          {{ act.start | format_date }}
-        </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
-          {{ act.finish | format_date }}
-        </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;text-align:right;">
-          {% if act.is_milestone %}<span style="color:var(--sk-muted);">—</span>
-          {% else %}{{ act.duration_days }}d{% endif %}
-        </td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:6.5pt;text-align:right;">
-          {% if act.float_days == 0 %}
-            <span style="color:var(--sk-fail);font-weight:600;">0d</span>
-          {% else %}
-            {{ act.float_days }}d
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-
-{% endif %}<!-- /critical path -->
-
-
-<!-- ════════════════════════════════════════════════════════════════════════════
-     ④ ANALYTICS
-     Left column:  Float distribution histogram + Relationship type breakdown
-     Right column: Bottleneck top-10 table
-════════════════════════════════════════════════════════════════════════════ -->
-<div class="page-section">
-  <div class="section-title">
-    <span class="section-pip"></span>④ Analytics
-  </div>
-
-  <div class="analytics-grid">
-
-    <!-- ── LEFT COLUMN ───────────────────────────────────────────────────── -->
-    <div class="analytics-col">
-
-      <!-- Float Distribution Histogram -->
-      {% if float_histogram and float_histogram.bins %}
-      <div class="analytics-card">
-        <div class="analytics-card-title">
-          Float Distribution
-          <span style="font-family:'JetBrains Mono',monospace;font-size:7pt;color:var(--sk-muted);font-weight:400;margin-left:8px;">
-            mean {{ float_histogram.mean_float_days | round(1) }}d &nbsp;·&nbsp;
-            median {{ float_histogram.median_float_days | round(1) }}d
-          </span>
-        </div>
-
-        {# Find max bin count for scaling bar widths #}
-        {% set max_count = namespace(val=1) %}
-        {% for bin in float_histogram.bins %}
-          {% if bin.count > max_count.val %}{% set max_count.val = bin.count %}{% endif %}
-        {% endfor %}
-
-        <div class="histogram-wrap">
-          {% for bin in float_histogram.bins %}
-            {# Colour mapping: severity field from API #}
-            {% set bar_col =
-               '#DC2626' if bin.severity == 'fail' else
-               '#D97706' if bin.severity == 'warn' else
-               '#16A34A' %}
-            {% set pct = ((bin.count / max_count.val) * 100) | int %}
-            <div class="hist-row">
-              <div class="hist-label">{{ bin.label }}</div>
-              <div class="hist-bar-bg">
-                <div class="hist-bar-fill"
-                     style="width:{{ pct }}%;background:{{ bar_col }};"></div>
-              </div>
-              <div class="hist-count">{{ bin.count | format_num }}</div>
-            </div>
-          {% endfor %}
-        </div>
-      </div>
-      {% endif %}
-
-      <!-- Relationship Type Breakdown -->
-      {% if relationship_breakdown %}
-      <div class="analytics-card">
-        <div class="analytics-card-title">Relationship Type Breakdown</div>
-
-        {% set rb = relationship_breakdown %}
-        {% set total = rb.total if rb.total else 1 %}
-
-        {% for rel_type, rel_count, rel_col in [
-            ('FS — Finish to Start', rb.FS, '#4A6FE8'),
-            ('SS — Start to Start',  rb.SS, '#1EC8D4'),
-            ('FF — Finish to Finish',rb.FF, '#D97706'),
-            ('SF — Start to Finish', rb.SF, '#DC2626')
-          ] %}
-          {% set pct = ((rel_count / total) * 100) | round(1) %}
-          <div class="rel-row">
-            <div class="rel-label">{{ rel_type[:2] }}</div>
-            <div class="rel-bar-bg">
-              <div class="rel-bar-fill"
-                   style="width:{{ pct }}%;background:{{ rel_col }};"></div>
-            </div>
-            <div class="rel-count">{{ rel_count | format_num }}</div>
-            <div class="rel-pct">{{ pct }}%</div>
-          </div>
-        {% endfor %}
-
-        <div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--sk-border);
-                    display:flex;justify-content:space-between;
-                    font-family:'JetBrains Mono',monospace;font-size:7pt;color:var(--sk-muted);">
-          <span>Total relationships</span>
-          <span style="color:var(--sk-text);font-weight:600;">{{ rb.total | format_num }}</span>
-        </div>
-
-        {# SF warning — SF relationships almost always indicate an error #}
-        {% if rb.SF > 0 %}
-        <div class="callout callout-warn" style="margin-top:8px;font-size:6.5pt;">
-          <strong>{{ rb.SF }} SF relationship{{ 's' if rb.SF > 1 else '' }} detected.</strong>
-          Start-to-Finish relationships almost always indicate a scheduling error.
-          Review and correct before submission.
-        </div>
-        {% endif %}
-      </div>
-      {% endif %}
-
-    </div><!-- /left col -->
-
-    <!-- ── RIGHT COLUMN: Bottleneck Top-10 ──────────────────────────────── -->
-    <div class="analytics-col">
-
-      {% if network_metrics and network_metrics.top_bottlenecks %}
-      <div class="analytics-card">
-        <div class="analytics-card-title">
-          Top Schedule Bottlenecks
-          <span style="font-family:'Open Sans',Arial,sans-serif;font-size:7pt;
-                       color:var(--sk-muted);font-weight:400;margin-left:6px;">
-            (fan-in × fan-out score)
-          </span>
-        </div>
-
-        <div class="callout callout-info" style="margin-bottom:8px;font-size:6.5pt;">
-          Activities with high fan-in AND fan-out scores are structural bottlenecks —
-          any delay here cascades through a large portion of the network.
-          Zero-float bottlenecks are the highest risk.
-        </div>
-
-        <table class="bottleneck-table">
-          <thead>
-            <tr>
-              <th style="width:5%">#</th>
-              <th style="width:35%">Activity</th>
-              <th style="width:12%" class="right">In</th>
-              <th style="width:12%" class="right">Out</th>
-              <th style="width:12%" class="right">Score</th>
-              <th style="width:12%" class="right">Float</th>
-              <th style="width:12%" class="right">Critical</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for bot in network_metrics.top_bottlenecks[:10] %}
-            <tr>
-              <td style="color:var(--sk-muted);font-family:'JetBrains Mono',monospace;font-size:6pt;">
-                {{ loop.index }}
-              </td>
-              <td style="font-size:6.5pt;">
-                <div style="font-family:'JetBrains Mono',monospace;font-size:6pt;color:var(--sk-peri);">
-                  {{ bot.id }}
-                </div>
-                <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;">
-                  {{ bot.name | truncate(38) }}
-                </div>
-              </td>
-              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
-                {{ bot.fan_in }}
-              </td>
-              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;">
-                {{ bot.fan_out }}
-              </td>
-              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
-                         font-weight:600;color:var(--sk-peri);">
-                {{ bot.score }}
-              </td>
-              <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6.5pt;
-                         color:{% if bot.float_days is defined and bot.float_days <= 0 %}var(--sk-fail)
-                               {% else %}var(--sk-muted){% endif %};">
-                {% if bot.float_days is defined %}{{ bot.float_days }}d{% else %}—{% endif %}
-              </td>
-              <td style="text-align:right;font-size:6.5pt;">
-                {% if bot.is_critical %}
-                  <span style="color:var(--sk-fail);font-weight:700;">●</span>
-                {% else %}
-                  <span style="color:var(--sk-border);">○</span>
-                {% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% endif %}
-
-      <!-- Network Density summary -->
-      {% if network_metrics %}
-      <div class="analytics-card">
-        <div class="analytics-card-title">Network Metrics</div>
-        <div class="kv-row">
-          <span class="kv-key">Logic density (rels/task)</span>
-          <span class="kv-val"
-            style="color:{% if network_metrics.ratio < 0.5 or network_metrics.ratio > 4.0 %}var(--sk-warn){% else %}var(--sk-pass){% endif %};">
-            {{ network_metrics.ratio | round(2) }}
-          </span>
-        </div>
-        <div class="kv-row">
-          <span class="kv-key">Open starts (no predecessor)</span>
-          <span class="kv-val"
-            style="color:{% if network_metrics.open_starts > 0 %}var(--sk-warn){% else %}var(--sk-pass){% endif %};">
-            {{ network_metrics.open_starts }}
-          </span>
-        </div>
-        <div class="kv-row">
-          <span class="kv-key">Open ends (no successor)</span>
-          <span class="kv-val"
-            style="color:{% if network_metrics.open_ends > 1 %}var(--sk-warn){% else %}var(--sk-pass){% endif %};">
-            {{ network_metrics.open_ends }}
-          </span>
-        </div>
-        {% if network_metrics.top_bottlenecks %}
-        <div class="kv-row">
-          <span class="kv-key">Bottleneck activities identified</span>
-          <span class="kv-val">{{ network_metrics.top_bottlenecks | length }}</span>
-        </div>
-        {% endif %}
-        <div style="margin-top:6px;padding-top:5px;border-top:1px solid var(--sk-border);
-                    font-size:6.5pt;color:var(--sk-muted);">
-          Healthy logic density: 0.5–4.0 relationships per incomplete task.
-          Open starts/ends (beyond project boundaries) indicate incomplete network logic.
-        </div>
-      </div>
-      {% endif %}
-
-    </div><!-- /right col -->
-
-  </div><!-- /analytics-grid -->
-
-</div><!-- /analytics section -->
-
-
-{% if helios_insights %}
-
-<!-- ── HELIOS AI INSIGHTS SECTION ──────────────────────────────────────── -->
-<div style="page-break-before: always;"></div>
-
-<div style="padding: 0; font-family: 'Open Sans', Arial, sans-serif;">
-
-  <!-- Section header -->
-  <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
-              padding-bottom: 10px; border-bottom: 2px solid #E2E6F0;">
-    <!-- Helios badge — gradient circle with H -->
-    <div style="width: 28px; height: 28px; border-radius: 50%;
-                background: linear-gradient(135deg, #1EC8D4, #4A6FE8, #2A4DCC);
-                display: flex; align-items: center; justify-content: center;
-                color: white; font-family: 'Montserrat', Arial, sans-serif;
-                font-weight: 900; font-size: 12pt; flex-shrink: 0;">H</div>
-    <div>
-      <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
-                  font-size: 14pt; color: #1A1A2E;">Helios AI Insights</div>
-      <div style="font-size: 7pt; color: #6B7280;">
-        AI-generated schedule analysis · SKOPIA Lens
-      </div>
-    </div>
-  </div>
-
-  <!-- Health Insights block -->
-  {% if helios_insights.health %}
-  <div style="margin-bottom: 20px; background: #F7F8FC; border: 1px solid #E2E6F0;
-              border-left: 4px solid #1EC8D4; border-radius: 6px; padding: 14px 16px;">
-    <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
-                font-size: 9.5pt; color: #1EC8D4; text-transform: uppercase;
-                letter-spacing: 0.06em; margin-bottom: 10px;">Health Insights</div>
-
-    {% set lines = helios_insights.health.content.split('\n') %}
-    {% for line in lines %}
-      {% if line.strip() == '' %}
-        <div style="height: 6px;"></div>
-      {% elif line.strip().startswith('**') and line.strip().endswith('**') %}
-        <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
-                    font-size: 9pt; color: #1A1A2E; margin-top: 10px; margin-bottom: 3px;">
-          {{ line.strip().replace('**', '') }}
-        </div>
-      {% else %}
-        <div style="font-size: 8.5pt; color: #374151; line-height: 1.65; margin-bottom: 2px;">
-          {{ line }}
-        </div>
-      {% endif %}
-    {% endfor %}
-
-    <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #E2E6F0;
-                font-size: 6.5pt; color: #9CA3AF; font-family: 'JetBrains Mono', monospace;">
-      Generated {{ helios_insights.health.generatedAt[:16] | replace('T', ' ') }} ·
-      Helios AI · SKOPIA Lens
-    </div>
-  </div>
-  {% endif %}
-
-  <!-- Baseline Variance block -->
-  {% if helios_insights.baseline %}
-  <div style="margin-bottom: 20px; background: #F7F8FC; border: 1px solid #E2E6F0;
-              border-left: 4px solid #4A6FE8; border-radius: 6px; padding: 14px 16px;">
-    <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
-                font-size: 9.5pt; color: #4A6FE8; text-transform: uppercase;
-                letter-spacing: 0.06em; margin-bottom: 10px;">Baseline Variance Analysis</div>
-
-    {% set lines = helios_insights.baseline.content.split('\n') %}
-    {% for line in lines %}
-      {% if line.strip() == '' %}
-        <div style="height: 6px;"></div>
-      {% elif line.strip().startswith('**') and line.strip().endswith('**') %}
-        <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
-                    font-size: 9pt; color: #1A1A2E; margin-top: 10px; margin-bottom: 3px;">
-          {{ line.strip().replace('**', '') }}
-        </div>
-      {% else %}
-        <div style="font-size: 8.5pt; color: #374151; line-height: 1.65; margin-bottom: 2px;">
-          {{ line }}
-        </div>
-      {% endif %}
-    {% endfor %}
-
-    <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #E2E6F0;
-                font-size: 6.5pt; color: #9CA3AF; font-family: 'JetBrains Mono', monospace;">
-      Generated {{ helios_insights.baseline.generatedAt[:16] | replace('T', ' ') }} ·
-      Helios AI · SKOPIA Lens
-    </div>
-  </div>
-  {% endif %}
-
-  <!-- Forensic Risk Analysis block -->
-  {% if helios_insights.forensic %}
-  <div style="margin-bottom: 20px; background: #FFF9F9; border: 1px solid #FECACA;
-              border-left: 4px solid #DC2626; border-radius: 6px; padding: 14px 16px;">
-    <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
-                font-size: 9.5pt; color: #DC2626; text-transform: uppercase;
-                letter-spacing: 0.06em; margin-bottom: 10px;">⚑ Forensic Risk Analysis</div>
-
-    {% set lines = helios_insights.forensic.content.split('\n') %}
-    {% for line in lines %}
-      {% if line.strip() == '' %}
-        <div style="height: 6px;"></div>
-      {% elif line.strip().startswith('**') and line.strip().endswith('**') %}
-        <div style="font-family: 'Montserrat', Arial, sans-serif; font-weight: 700;
-                    font-size: 9pt; color: #7F1D1D; margin-top: 10px; margin-bottom: 3px;">
-          {{ line.strip().replace('**', '') }}
-        </div>
-      {% else %}
-        <div style="font-size: 8.5pt; color: #374151; line-height: 1.65; margin-bottom: 2px;">
-          {{ line }}
-        </div>
-      {% endif %}
-    {% endfor %}
-
-    <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #FECACA;
-                font-size: 6.5pt; color: #9CA3AF; font-family: 'JetBrains Mono', monospace;">
-      Generated {{ helios_insights.forensic.generatedAt[:16] | replace('T', ' ') }} ·
-      Helios AI · SKOPIA Lens · Forensic Analysis
-    </div>
-  </div>
-  {% endif %}
-
-  <!-- Disclaimer -->
-  <div style="font-size: 6.5pt; color: #9CA3AF; font-family: 'Open Sans', Arial, sans-serif;
-              border-top: 1px solid #E2E6F0; padding-top: 8px; line-height: 1.5;">
-    AI-generated insights are based on schedule data only. Always verify findings
-    against the source schedule before making project decisions.
-    Helios · SKOPIA Lens · {{ generated_at }}
-  </div>
 
 </div>
-{% endif %}
+{% endif %}{# /scene_activities #}
 
 
 </body>
