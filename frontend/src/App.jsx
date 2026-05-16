@@ -465,7 +465,8 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
   const [error,           setError]           = useState(null)
   const [success,         setSuccess]         = useState(false)
   const [previewLoading,  setPreviewLoading]  = useState(false)
-  const [advancedOpen,    setAdvancedOpen]    = useState(false)  // Advanced Settings accordion
+  const [contentOpen,     setContentOpen]     = useState(true)   // Content accordion — open by default
+  const [advancedOpen,    setAdvancedOpen]    = useState(false)  // Page Settings accordion
   const [zoomPct,         setZoomPct]         = useState(75)     // Preview zoom 50–150
 
   // Content section toggles
@@ -595,15 +596,50 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
       }
     }
 
-    // Strip data for unchecked sections
-    if (!sections.schedule_data) payload.schedule_data    = null
-    if (!sections.longest_path)  payload.longest_path     = []
+    // ── Strip / populate data per section toggle ──────────────────────────────
+    //
+    // Bug fix: the template guards on data presence, NOT on _sections flags.
+    // So we must actually null out data for unchecked sections, and populate
+    // _scene_data (required by the template's schedule table block) from
+    // schedule_data.activities when the schedule section is enabled.
+    //
+    // Template conditional → what we must do here:
+    //   {% if helios_insights %}          → null payload._helios_insights
+    //   {% for check in checks %}         → empty payload.checks array
+    //   {% if scene_activities %}         → populate payload._scene_data
+    //   {% if longest_path %}             → empty payload.longest_path
+    //   analytics blocks checked by data  → null the relevant fields
+
+    // Helios — null the insights object so template skips the page entirely
+    if (!sections.helios) {
+      payload._helios_insights = null
+    }
+
+    // Per-check detail pages — empty the checks array so the for-loop renders nothing
+    if (!sections.check_details) {
+      payload.checks = []
+    }
+
+    // Schedule Table — populate _scene_data from schedule_data.activities.
+    // The template uses {% if scene_activities %} gated on this key, NOT
+    // on schedule_data directly. The backend only sets scene_activities when
+    // _scene_data is present in the payload (see pdf_export.py line ~653).
+    if (sections.schedule_data && analysis.schedule_data?.activities?.length) {
+      payload._scene_data = analysis.schedule_data.activities
+    } else {
+      payload._scene_data   = null
+      payload.schedule_data = null
+    }
+
+    // Critical Path Trace
+    if (!sections.longest_path)  payload.longest_path = []
+
+    // Analytics — null the data blocks the template uses
     if (!sections.analytics) {
       payload.float_histogram        = null
       payload.relationship_breakdown = null
       payload.network_metrics        = { ...(payload.network_metrics ?? {}), top_bottlenecks: [] }
     }
-    // DCMA checks always included — part of cover/stats page
 
     // Template metadata
     payload._sections     = sections
@@ -729,8 +765,34 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
                   </div>
                 </div>
 
-                {/* ══ B. Content ════════════════════════════════════════════ */}
-                <SectionHeader label="Content" />
+                {/* ══ B. Content (collapsible) ══════════════════════════════ */}
+                {/* Accordion toggle — open by default */}
+                <div
+                  onClick={() => setContentOpen(v => !v)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    cursor: 'pointer', marginBottom: contentOpen ? 12 : 20,
+                    userSelect: 'none',
+                  }}
+                >
+                  <div style={{ height: 1, background: W.border, flex: 1 }} />
+                  <div style={{
+                    fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10,
+                    color: W.muted, textTransform: 'uppercase', letterSpacing: '0.07em',
+                    whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4,
+                  }}>
+                    Content
+                    <span style={{
+                      display: 'inline-block',
+                      transform: contentOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transition: 'transform 0.18s',
+                      fontSize: 9, lineHeight: 1,
+                    }}>▼</span>
+                  </div>
+                  <div style={{ height: 1, background: W.border, flex: 1 }} />
+                </div>
+
+                {contentOpen && (
                 <div style={{ marginBottom: 20 }}>
                   <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: W.muted, marginBottom: 8 }}>
                     Select which sections to include. Sections appear in this order in the PDF.
@@ -806,6 +868,7 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
                     })}
                   </div>
                 </div>
+                )}
 
                 {/* ══ C. Advanced Settings (collapsible) ════════════════════ */}
                 {/* Accordion toggle row */}

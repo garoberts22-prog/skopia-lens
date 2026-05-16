@@ -635,7 +635,14 @@ def _render_pdf(analysis: dict) -> bytes:
     relationship_breakdown = analysis.get("relationship_breakdown", {})
     schedule_data   = analysis.get("schedule_data")
     helios_insights = analysis.get("_helios_insights")
-    scene_data      = analysis.get("_scene_data")     # list of filtered activities
+    scene_data      = analysis.get("_scene_data")     # list of filtered activities from frontend
+
+    # Fallback: if _scene_data not explicitly sent but schedule_data.activities exists
+    # and the schedule section was not stripped by the wizard, use activities directly.
+    # This keeps the endpoint working when called without the full wizard payload.
+    if scene_data is None and schedule_data and schedule_data.get("activities"):
+        scene_data = schedule_data["activities"]
+
     baseline        = analysis.get("_baseline")
 
     # ── Spider chart SVG ──────────────────────────────────────────────────────
