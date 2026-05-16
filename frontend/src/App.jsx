@@ -605,11 +605,17 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
     // Schedule Table — use the active Scene's filtered activity list if available.
     // sceneActivitiesProp comes from AnalysisContext.sceneActivities, which
     // ScheduleView writes whenever the visible activity list changes (scene switch,
-    // filter change, etc.). Falls back to full activity list if scene not set.
+    // filter change, etc.).
+    //
+    // Three cases:
+    //   null       → ScheduleView was never mounted (user on Health view) — use full list
+    //   []         → ScheduleView mounted but all rows collapsed or filtered — send empty
+    //               (template gets no scene_activities → no schedule table rendered)
+    //   [...]      → populated scene — use exactly what's visible
     if (sections.schedule_data && analysis.schedule_data?.activities?.length) {
-      payload._scene_data = sceneActivitiesProp?.length
-        ? sceneActivitiesProp                           // active Scene filtered list
-        : analysis.schedule_data.activities             // fallback: full list
+      payload._scene_data = sceneActivitiesProp !== null
+        ? sceneActivitiesProp                           // active Scene list (may be empty)
+        : analysis.schedule_data.activities             // fallback: full list (never visited ScheduleView)
     } else {
       payload._scene_data   = null
       payload.schedule_data = null

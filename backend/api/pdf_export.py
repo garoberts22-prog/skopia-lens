@@ -636,13 +636,10 @@ def _render_pdf(analysis: dict) -> bytes:
     schedule_data   = analysis.get("schedule_data")
     helios_insights = analysis.get("_helios_insights")
     scene_data      = analysis.get("_scene_data")     # list of filtered activities from frontend
-
-    # Fallback: if _scene_data not explicitly sent but schedule_data.activities exists
-    # and the schedule section was not stripped by the wizard, use activities directly.
-    # This keeps the endpoint working when called without the full wizard payload.
-    if scene_data is None and schedule_data and schedule_data.get("activities"):
-        scene_data = schedule_data["activities"]
-
+    # NOTE: No fallback here — App.jsx controls what goes in _scene_data.
+    # If _scene_data is None, the schedule table section is excluded entirely.
+    # If _scene_data is an empty list, scene_activities will be None (no table).
+    # This prevents the full activity list leaking in when a scene is active.
     baseline        = analysis.get("_baseline")
 
     # ── Spider chart SVG ──────────────────────────────────────────────────────
@@ -709,6 +706,11 @@ def _render_pdf(analysis: dict) -> bytes:
 
         # Baseline snapshot
         "baseline":        baseline,
+
+        # Section toggles — controls which pages render in the template.
+        # Keyed by the same section keys the wizard uses. Defaults to True
+        # (all sections on) when not supplied, preserving backward compatibility.
+        "sections":        analysis.get("_sections", {}),
     }
 
     # ── Render HTML ───────────────────────────────────────────────────────────

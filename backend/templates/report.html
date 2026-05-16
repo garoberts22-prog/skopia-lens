@@ -851,7 +851,9 @@
 
 {# ═══════════════════════════════════════════════════════════════════════════
    PAGE 1 — COVER: HEADER · GRADE + STATS · CHECKS TABLE / SPIDER · ACTIONS
+   Conditional: sections.summary (defaults True when not supplied)
 ═══════════════════════════════════════════════════════════════════════════ #}
+{% if sections.get('summary', True) %}
 
 <!-- Document header -->
 <div class="doc-header">
@@ -1105,6 +1107,8 @@
   <span>SKOPIA Lens &nbsp;·&nbsp; Schedule Health Report &nbsp;·&nbsp; Confidential</span>
   <span>Generated {{ generated_at }}</span>
 </div>
+
+{% endif %}{# /sections.summary #}
 
 
 {# ═══════════════════════════════════════════════════════════════════════════
