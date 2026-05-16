@@ -818,19 +818,148 @@ async def export_pdf(analysis: dict[str, Any]):
 #   page_settings   {size, orientation, css_size}
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+def _build_gantt_timeline_svg(
+    gantt_start_iso: str,
+    gantt_end_iso: str,
+    width_px: int = 300,
+) -> str:
+    """
+    Build a Year / Quarter / Month timeline header SVG, matching ScheduleView's
+    TimelineHeader() component exactly.
+
+    Three-tier layout (heights match ScheduleView constants):
+      TL_YEAR_H  = 18 px  — year labels, Montserrat 700, light text on charcoal
+      TL_QTR_H   = 16 px  — quarter labels Q1–Q4, periwinkle (#4A6FE8)
+      TL_MONTH_H = 16 px  — month abbreviations, muted (#9CA3AF)
+      Total      = 50 px
+
+    Background: #1E1E1E (charcoal) — set on the containing <th> in the template.
+    SVG itself is transparent so the <th> background shows through.
+    Grid lines: #E2E6F0 (sk-border) at reduced opacity.
+    Bottom border: 2px solid #2A4DCC applied via CSS on the <th>, not in the SVG.
+    """
+    try:
+        gs = datetime.fromisoformat(str(gantt_start_iso).replace("Z", ""))
+        ge = datetime.fromisoformat(str(gantt_end_iso).replace("Z", ""))
+    except (ValueError, TypeError):
+        return ""
+
+    total_days = max(1, (ge - gs).days)
+    W  = width_px
+    Y1 = 18   # year row height
+    Y2 = 16   # quarter row height
+    Y3 = 16   # month row height
+    H  = Y1 + Y2 + Y3   # 50px total
+
+    def d2x(dt: datetime) -> float:
+        return round(((dt - gs).days / total_days) * W, 1)
+
+    # Quarter starts are months 0, 3, 6, 9 (0-indexed)
+    QTR_MAP = {0: "Q1", 3: "Q2", 6: "Q3", 9: "Q4"}
+
+    # Estimate px per month for label visibility threshold (≥22px = show label)
+    month_px = W / max(1, total_days / 30.44)
+
+    years:    list[tuple[float, int]]           = []
+    quarters: list[tuple[float, str]]           = []
+    months:   list[tuple[float, str, bool]]     = []
+
+    cur = gs.replace(day=1)
+    while cur <= ge:
+        x  = d2x(cur)
+        mo = cur.month - 1   # 0-indexed
+        yr = cur.year
+
+        if not years or years[-1][1] != yr:
+            years.append((x, yr))
+        if mo in QTR_MAP:
+            quarters.append((x, QTR_MAP[mo]))
+        months.append((x, cur.strftime("%b"), month_px >= 22))
+
+        # Advance one month
+        if cur.month == 12:
+            cur = cur.replace(year=cur.year + 1, month=1, day=1)
+        else:
+            cur = cur.replace(month=cur.month + 1, day=1)
+
+    y_qtr  = Y1
+    y_mo   = Y1 + Y2
+    y_end  = H
+
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
+        f'style="display:block;">',
+    ]
+
+    # ── Year row ──────────────────────────────────────────────────────────────
+    for x, yr in years:
+        # Vertical rule at year boundary — full height
+        lines.append(
+            f'<line x1="{x}" y1="0" x2="{x}" y2="{y_end}" '
+            f'stroke="#E2E6F0" stroke-width="1.5" opacity="0.35"/>'
+        )
+        # Year label: white-ish, Montserrat bold, vertically centred in year band
+        lines.append(
+            f'<text x="{x + 4}" y="{Y1 - 5}" '
+            f'font-family="Montserrat,Arial,sans-serif" font-size="10" '
+            f'font-weight="700" fill="#E2E8F0">{yr}</text>'
+        )
+
+    # Horizontal separator between year and quarter bands
+    lines.append(
+        f'<line x1="0" y1="{y_qtr}" x2="{W}" y2="{y_qtr}" '
+        f'stroke="#E2E6F0" stroke-width="1" opacity="0.25"/>'
+    )
+
+    # ── Quarter row ───────────────────────────────────────────────────────────
+    for x, label in quarters:
+        lines.append(
+            f'<line x1="{x}" y1="{y_qtr}" x2="{x}" y2="{y_end}" '
+            f'stroke="#E2E6F0" stroke-width="1" opacity="0.25"/>'
+        )
+        lines.append(
+            f'<text x="{x + 3}" y="{y_qtr + 12}" '
+            f'font-family="Montserrat,Arial,sans-serif" font-size="9" '
+            f'font-weight="700" fill="#4A6FE8">{label}</text>'
+        )
+
+    # Horizontal separator between quarter and month bands
+    lines.append(
+        f'<line x1="0" y1="{y_mo}" x2="{W}" y2="{y_mo}" '
+        f'stroke="#E2E6F0" stroke-width="1" opacity="0.25"/>'
+    )
+
+    # ── Month row ─────────────────────────────────────────────────────────────
+    for x, abbr, show_label in months:
+        lines.append(
+            f'<line x1="{x}" y1="{y_mo}" x2="{x}" y2="{y_end}" '
+            f'stroke="#E2E6F0" stroke-width="0.5" opacity="0.2"/>'
+        )
+        if show_label:
+            lines.append(
+                f'<text x="{x + 2}" y="{y_mo + 12}" '
+                f'font-family="Open Sans,Arial,sans-serif" font-size="8" '
+                f'fill="#9CA3AF">{abbr}</text>'
+            )
+
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+
 def _build_scene_row_svg(row: dict, ps_iso: str, pf_iso: str, bar_colors: dict,
                           bar_style: str, bar_opacity: float, corner_radius: int,
                           row_h: int) -> str:
     """
-    Render a single Gantt bar SVG for one activity row.
-    WBS rows have no bar — returns empty string.
-    Milestone (rem_dur == 0 or type == 'milestone') → diamond marker.
-    """
-    if row.get("_type") == "wbs":
-        return ""
+    Render a single Gantt bar SVG for one row.
 
+    WBS rows → hammock bar with bracket end-caps (matches ScheduleView exactly).
+    Milestone  → diamond marker.
+    Task       → filled/outline rect, colour by status/criticality.
+    """
     W = 300
-    h = max(4, row_h - 6)    # bar height within row padding
 
     try:
         ps = datetime.fromisoformat(str(ps_iso).replace("Z", ""))
@@ -839,6 +968,53 @@ def _build_scene_row_svg(row: dict, ps_iso: str, pf_iso: str, bar_colors: dict,
         return ""
 
     total_days = max(1, (pf - ps).days)
+
+    # ── WBS hammock bar ───────────────────────────────────────────────────────
+    # Matches ScheduleView GanttBar() wbs branch exactly:
+    #   hammockH = max(4, min(16, round(rh*0.44) - (level-1)*2))
+    #   capH     = min(rh-2, hammockH + max(3, round(rh*0.16)))
+    #   Three rects: thin centre bar (opacity 0.45) + left cap + right cap (0.85)
+    if row.get("_type") == "wbs":
+        col = row.get("_wbs_color") or "#4A6FE8"
+        level = int(row.get("level") or 1)
+
+        # Use wbs extents stored on the row, fallback to start/finish
+        start_str  = row.get("start",  "") or ""
+        finish_str = row.get("finish", "") or ""
+        try:
+            a_start  = datetime.fromisoformat(str(start_str).replace("Z",  ""))
+            a_finish = datetime.fromisoformat(str(finish_str).replace("Z", ""))
+        except (ValueError, TypeError):
+            return ""
+
+        x1 = max(0, int(((a_start - ps).days  / total_days) * W))
+        x2 = min(W, int(((a_finish - ps).days / total_days) * W))
+        bw = max(4, x2 - x1)
+
+        rh       = row_h
+        hammock_h = max(4, min(16, round(rh * 0.44) - (level - 1) * 2))
+        cap_h     = min(rh - 2, hammock_h + max(3, round(rh * 0.16)))
+        hamm_y    = (rh - hammock_h) // 2
+        cap_y     = (rh - cap_h)     // 2
+        cap_w     = 4
+
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {rh}" '
+            f'width="{W}" height="{rh}" style="display:block;">'
+            # Centre hammock bar
+            f'<rect x="{x1 + 3}" y="{hamm_y}" width="{max(0, bw - 6)}" height="{hammock_h}" '
+            f'rx="2" fill="{col}" opacity="0.45"/>'
+            # Left cap
+            f'<rect x="{x1}" y="{cap_y}" width="{cap_w}" height="{cap_h}" '
+            f'rx="1" fill="{col}" opacity="0.85"/>'
+            # Right cap
+            f'<rect x="{x1 + bw - cap_w}" y="{cap_y}" width="{cap_w}" height="{cap_h}" '
+            f'rx="1" fill="{col}" opacity="0.85"/>'
+            f'</svg>'
+        )
+
+    # ── Task/milestone rows ───────────────────────────────────────────────────
+    h = max(4, row_h - 6)    # bar height within row padding
 
     start_str  = row.get("start",  "") or ""
     finish_str = row.get("finish", "") or ""
@@ -852,7 +1028,7 @@ def _build_scene_row_svg(row: dict, ps_iso: str, pf_iso: str, bar_colors: dict,
     x2 = min(W, int(((a_finish - ps).days / total_days) * W))
     bw = max(2, x2 - x1)
 
-    # Colour
+    # Colour by status/criticality
     is_complete = (str(row.get("status","")).lower() in ("complete","completed")
                    or float(row.get("pct", 0) or 0) >= 100)
     is_critical = (row.get("critical", False)
@@ -950,6 +1126,11 @@ def _render_scene_pdf(scene: dict) -> bytes:
         )
         rows_with_svg.append({**row, "_gantt_svg": svg})
 
+    # ── Gantt timeline header SVG ─────────────────────────────────────────────
+    # Pre-rendered once, placed in the <thead> Gantt column.
+    # Width 300px matches the Gantt SVG column width used by _build_scene_row_svg.
+    gantt_timeline_svg = _build_gantt_timeline_svg(scale_start, scale_end, width_px=300)
+
     # ── Format dates ──────────────────────────────────────────────────────────
     def fmt_iso(s):
         if not s: return "—"
@@ -971,6 +1152,7 @@ def _render_scene_pdf(scene: dict) -> bytes:
         "bar_colors":     bar_colors,
         "bar_style":      bar_style,
         "row_height":     row_height,
+        "gantt_timeline_svg": gantt_timeline_svg,
         "page_settings":  page_settings,
         "css_page_size":  page_settings.get("css_size", "A4 landscape"),
     }

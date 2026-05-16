@@ -258,7 +258,7 @@
 
   .scene-table tbody tr:nth-child(even) td { background: #FAFBFF; }
 
-  /* WBS band header rows */
+  /* WBS band header rows — left table cells only */
   .wbs-row td {
     background: var(--wbs-bg, #EEF2FF) !important;
     font-family: 'Montserrat', Arial, sans-serif;
@@ -270,8 +270,22 @@
     page-break-after: avoid;
   }
 
-  /* Critical + complete row styles */
-  .crit-row td { background: #FFF5F5 !important; }
+  /* Gantt cell for WBS rows — white, no colour bleed from band */
+  .wbs-gantt-td {
+    background: #FFFFFF !important;
+    padding: 1px 2px !important;
+    border-bottom: 1px solid var(--sk-border) !important;
+    vertical-align: middle;
+  }
+
+  /*
+   * NO background fill for critical or complete rows.
+   * Criticality is signalled via text colour only:
+   *   Activity ID  → var(--sk-fail) red
+   *   Total Float  → var(--sk-warn) amber at 0d, var(--sk-fail) red when negative
+   *   Gantt bar    → red fill for critical, green for complete
+   * A red row background washes out WBS band colours and reduces readability.
+   */
   .done-row td { color: var(--sk-muted) !important; }
 
   /* Gantt column — fixed width, SVG fills it */
@@ -405,11 +419,38 @@
     </colgroup>
 
     <thead>
+      {# ── Timeline header row ──────────────────────────────────────────────── #}
+      {# Left cells: column labels on charcoal (#1E1E1E), matching ScheduleView  #}
+      {# Gantt cell: pre-rendered Year/Qtr/Month SVG from pdf_export.py          #}
+      {# Border-bottom: 2px brand blue (#2A4DCC), matching ScheduleView divider  #}
       <tr>
         {% for col in vis_cols %}
-          <th>{{ col.label }}</th>
+          <th style="
+            background:#1E1E1E;
+            border-bottom:2px solid #2A4DCC;
+            color:#E2E8F0;
+            font-family:'JetBrains Mono',monospace;
+            font-size:5.5pt;
+            text-transform:uppercase;
+            letter-spacing:0.07em;
+            font-weight:400;
+            padding:4px 5px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-align:left;
+          ">{{ col.label }}</th>
         {% endfor %}
-        <th>Gantt</th>
+        <th style="
+          background:#1E1E1E;
+          border-bottom:2px solid #2A4DCC;
+          padding:0;
+          vertical-align:top;
+          overflow:hidden;
+        ">
+          {% if gantt_timeline_svg %}
+            {{ gantt_timeline_svg | safe }}
+          {% endif %}
+        </th>
       </tr>
     </thead>
 
@@ -418,28 +459,33 @@
 
         {% if row._type == 'wbs' %}
           {# ── WBS band header row ── #}
-          {# _wbs_color is pre-resolved by ScheduleView to the correct scheme colour. #}
+          {# Left cells span vis_cols only — colour band text, indented by level.  #}
+          {# Gantt cell is SEPARATE with white background — no colour bleed.       #}
+          {# Hammock SVG (_gantt_svg) is rendered in the Gantt cell when present.  #}
           {% set wbs_col = row._wbs_color | default('#4A6FE8') %}
-          {# Derive light background: colour at ~15% opacity over white.             #}
-          {# WeasyPrint supports rgba() in background — use it directly.             #}
           <tr class="wbs-row" style="
             --wbs-bg:     {{ wbs_col }}26;
             --wbs-border: {{ wbs_col }}40;
             --wbs-text:   {{ wbs_col }};
           ">
-            {# Span all vis_cols + Gantt column #}
-            <td colspan="{{ vis_cols | length + 1 }}" style="color: {{ wbs_col }};">
-              ▸ {{ row.name | truncate(110) }}
+            {# Table cells — span vis_cols only, NOT the Gantt column #}
+            <td colspan="{{ vis_cols | length }}" style="color:{{ wbs_col }};">
+              {% set indent = ([0, (row.level | default(1) - 1) * 8] | max) %}
+              <span style="padding-left:{{ indent }}px;">▸ {{ row.name | truncate(90) }}</span>
+            </td>
+            {# Gantt cell — always white, hammock SVG only if present #}
+            <td class="wbs-gantt-td">
+              {% if row._gantt_svg %}{{ row._gantt_svg | safe }}{% endif %}
             </td>
           </tr>
 
         {% else %}
-          {# ── Task row ── #}
+          {# ── Task row — no background fill for criticality (text signals only) #}
           {% set is_critical = row.critical or (row.total_float is not none and row.total_float <= 0) %}
-          {% set is_complete = row.status in ('Complete', 'completed') or row.pct == 100 %}
-          {% set is_mile     = row.type == 'milestone' or (row.rem_dur is not none and row.rem_dur == 0) %}
+          {% set is_complete  = row.status in ('Complete', 'completed') or row.pct == 100 %}
+          {% set is_mile      = row.type == 'milestone' or (row.rem_dur is not none and row.rem_dur == 0) %}
 
-          <tr class="{% if is_critical and not is_complete %}crit-row{% elif is_complete %}done-row{% endif %}">
+          <tr class="{% if is_complete %}done-row{% endif %}">
 
             {% for col in vis_cols %}
               {% set k = col.key %}
