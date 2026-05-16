@@ -1919,7 +1919,7 @@ export default function ScheduleView({ onNavigate }) {
     )
   }
 
-  const { baseline } = useAnalysis()
+  const { baseline, setSceneActivities } = useAnalysis()
 
   const { activities: rawActivities, wbs_nodes:rawWbs, relationships, calendars: rawCalendars } = analysis.schedule_data
 
@@ -2197,6 +2197,16 @@ export default function ScheduleView({ onNavigate }) {
     }
     return result
   },[rows,sortKey,sortDir,critOnly,showWbsBands])
+
+  // ── Publish visible activities to AnalysisContext for PDF export ───────────
+  // ReportWizard reads sceneActivities from context so the exported Schedule
+  // Table reflects exactly what is visible here (active Scene, filters, sort).
+  // Only task rows are published — WBS band header rows are excluded because
+  // the PDF template iterates activities directly, not the interleaved structure.
+  useEffect(() => {
+    const taskRows = sortedRows.filter(r => r._type === 'task')
+    setSceneActivities(taskRows)
+  }, [sortedRows, setSceneActivities])
 
   const handleGoTo = useCallback((id) => {
     // ── Rule 1: Resolve the target activity ──────────────────────────────────

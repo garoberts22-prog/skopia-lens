@@ -455,9 +455,10 @@ ${pages.join('\n')}
 //   longest_path   — Critical Path Trace
 //   analytics      — Analytics
 // ─────────────────────────────────────────────────────────────────────────────
-function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
+function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivitiesProp, onClose }) {
   const hasScheduleData = !!(analysis?.schedule_data?.activities?.length)
-  const hasHelios       = !!(heliosInsightsProp?.health || heliosInsightsProp?.baseline)
+  // Include all three Helios modes — forensic-only is valid (no health/baseline required)
+  const hasHelios       = !!(heliosInsightsProp?.health || heliosInsightsProp?.baseline || heliosInsightsProp?.forensic)
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [companyName,     setCompanyName]     = useState('')
@@ -469,14 +470,12 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
   const [advancedOpen,    setAdvancedOpen]    = useState(false)  // Page Settings accordion
   const [zoomPct,         setZoomPct]         = useState(75)     // Preview zoom 50–150
 
-  // Content section toggles
+  // Content section toggles — only sections that are still in the report
   const [sections, setSections] = useState({
     summary:       true,
-    helios:        hasHelios,           // only default-on if insights exist
+    helios:        hasHelios,        // default-on only if insights exist
     check_details: true,
-    schedule_data: hasScheduleData,
-    longest_path:  true,
-    analytics:     true,
+    schedule_data: hasScheduleData,  // default-on only if schedule data exists
   })
 
   // Page settings (moved into Advanced Settings accordion)
@@ -485,9 +484,8 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
 
   // ── Section definitions — ordered as they appear in PDF ───────────────────
   //
-  // pageLabel is used in the preview iframe page header.
-  // All sections always present in SECTIONS; conditional visibility (helios,
-  // schedule_data) is handled by greying out + tooltips when unavailable.
+  // Critical Path Trace and Analytics are always included — they are not
+  // user-togglable (removed from report structure). Only four sections remain.
   const SECTIONS = [
     {
       key:       'summary',
@@ -503,7 +501,7 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
         ? 'AI-generated health insights, baseline commentary, and recommendations'
         : 'Helios AI insights not yet generated — run Helios first to include this section',
       icon:      '②',
-      available: hasHelios,     // greyed + tooltip when no insights
+      available: hasHelios,
     },
     {
       key:       'check_details',
@@ -516,24 +514,10 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
       key:       'schedule_data',
       label:     'Schedule Table & Gantt',
       desc:      hasScheduleData
-        ? 'Full activity listing with start, finish, duration, float, and status — reflects current activity listing'
+        ? 'Full activity listing with start, finish, duration, float, and status — reflects the active Scene'
         : 'No schedule data available — upload a schedule file to enable this section',
       icon:      '④',
       available: hasScheduleData,
-    },
-    {
-      key:       'longest_path',
-      label:     'Critical Path Trace',
-      desc:      'Ordered list of all activities on the longest driving path from start to finish',
-      icon:      '⑤',
-      available: true,
-    },
-    {
-      key:       'analytics',
-      label:     'Analytics',
-      desc:      'Float distribution histogram, relationship type breakdown, and bottleneck top-10',
-      icon:      '⑥',
-      available: true,
     },
   ]
 
@@ -598,17 +582,15 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
 
     // ── Strip / populate data per section toggle ──────────────────────────────
     //
-    // Bug fix: the template guards on data presence, NOT on _sections flags.
-    // So we must actually null out data for unchecked sections, and populate
-    // _scene_data (required by the template's schedule table block) from
-    // schedule_data.activities when the schedule section is enabled.
+    // The Jinja2 template guards on data presence, not on _sections flags.
+    // So we null out data for unchecked sections.
     //
-    // Template conditional → what we must do here:
-    //   {% if helios_insights %}          → null payload._helios_insights
-    //   {% for check in checks %}         → empty payload.checks array
-    //   {% if scene_activities %}         → populate payload._scene_data
-    //   {% if longest_path %}             → empty payload.longest_path
-    //   analytics blocks checked by data  → null the relevant fields
+    // Template conditional → what we do:
+    //   {% if helios_insights %}      → null payload._helios_insights
+    //   {% for check in checks %}     → empty payload.checks array
+    //   {% if scene_activities %}     → populate payload._scene_data
+    //
+    // Critical Path Trace and Analytics are always included (not user-togglable).
 
     // Helios — null the insights object so template skips the page entirely
     if (!sections.helios) {
@@ -620,25 +602,17 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, onClose }) {
       payload.checks = []
     }
 
-    // Schedule Table — populate _scene_data from schedule_data.activities.
-    // The template uses {% if scene_activities %} gated on this key, NOT
-    // on schedule_data directly. The backend only sets scene_activities when
-    // _scene_data is present in the payload (see pdf_export.py line ~653).
+    // Schedule Table — use the active Scene's filtered activity list if available.
+    // sceneActivitiesProp comes from AnalysisContext.sceneActivities, which
+    // ScheduleView writes whenever the visible activity list changes (scene switch,
+    // filter change, etc.). Falls back to full activity list if scene not set.
     if (sections.schedule_data && analysis.schedule_data?.activities?.length) {
-      payload._scene_data = analysis.schedule_data.activities
+      payload._scene_data = sceneActivitiesProp?.length
+        ? sceneActivitiesProp                           // active Scene filtered list
+        : analysis.schedule_data.activities             // fallback: full list
     } else {
       payload._scene_data   = null
       payload.schedule_data = null
-    }
-
-    // Critical Path Trace
-    if (!sections.longest_path)  payload.longest_path = []
-
-    // Analytics — null the data blocks the template uses
-    if (!sections.analytics) {
-      payload.float_histogram        = null
-      payload.relationship_breakdown = null
-      payload.network_metrics        = { ...(payload.network_metrics ?? {}), top_bottlenecks: [] }
     }
 
     // Template metadata
@@ -1226,7 +1200,7 @@ function EmptyState({ label, onUpload }) {
 export default function App() {
   const [view,           setView]       = useState('upload')
   const [showWizard,     setShowWizard] = useState(false)
-  const { analysis, baseline, heliosInsights } = useAnalysis()
+  const { analysis, baseline, heliosInsights, sceneActivities } = useAnalysis()
   const [showHelios, setShowHelios] = useState(false)
   const hasData = !!analysis
 
@@ -1292,6 +1266,7 @@ export default function App() {
           analysis={analysis}
           baselineProp={baseline}
           heliosInsightsProp={heliosInsights}
+          sceneActivitiesProp={sceneActivities}
           onClose={() => setShowWizard(false)}
         />
       )}
@@ -1303,7 +1278,7 @@ export default function App() {
         active={showHelios}
         hasNew={
           !showHelios && (
-            !!(heliosInsights?.health) || !!(heliosInsights?.baseline)
+            !!(heliosInsights?.health) || !!(heliosInsights?.baseline) || !!(heliosInsights?.forensic)
           )
         }
       />
