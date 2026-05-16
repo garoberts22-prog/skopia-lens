@@ -2198,15 +2198,65 @@ export default function ScheduleView({ onNavigate }) {
     return result
   },[rows,sortKey,sortDir,critOnly,showWbsBands])
 
-  // ── Publish visible activities to AnalysisContext for PDF export ───────────
-  // ReportWizard reads sceneActivities from context so the exported Schedule
-  // Table reflects exactly what is visible here (active Scene, filters, sort).
-  // Only task rows are published — WBS band header rows are excluded because
-  // the PDF template iterates activities directly, not the interleaved structure.
+  // ── Publish scene export payload to AnalysisContext ───────────────────────
+  //
+  // This is the single source of truth for the PDF Scene export pipeline.
+  // It serialises the COMPLETE current view model so the backend renders
+  // exactly what the user sees — no server-side reconstruction needed.
+  //
+  // Payload shape (matches _render_scene_pdf() expectations):
+  //   rows          — all visible rows in display order, both _type:'task' and
+  //                   _type:'wbs'. WBS rows carry {id, name, level, color} so
+  //                   the template can render band headers without a wbs_map lookup.
+  //   visCols       — visible columns in order, each with {key, label, width}
+  //   gantt_start   — ISO string of gantt timeline start (ganttStart module var)
+  //   gantt_end     — ISO string of gantt timeline end (ganttEnd module var)
+  //   bar_colors    — {normal, critical, complete} colour strings for current scheme
+  //   bar_style     — 'filled' | 'outline'
+  //   bar_opacity   — 0–1 float
+  //   bar_corner_radius — px integer
+  //   row_height    — px integer
+  //   crit_only     — boolean
+  //   show_wbs_bands— boolean
+  //   scene_name    — display name for the active scene (shown in PDF header)
+  //   project_start — ISO string (schedule_data.project_start, for Gantt scaling)
+  //   project_finish— ISO string (schedule_data.project_finish, for Gantt scaling)
   useEffect(() => {
-    const taskRows = sortedRows.filter(r => r._type === 'task')
-    setSceneActivities(taskRows)
-  }, [sortedRows, setSceneActivities])
+    // Resolve bar colours for current scheme
+    const scheme = BAR_SCHEMES[tweaks.barScheme] ?? BAR_SCHEMES.pastel
+    // Resolve WBS band colour function for current scheme
+    const wbsColorFn = tweaks.barScheme === 'vivid' ? wbsColVivid : wbsColPastel
+
+    // Annotate each WBS row with its display colour so the backend
+    // doesn't need to re-run the wbsColPastel/wbsColVivid logic
+    const annotatedRows = sortedRows.map(row => {
+      if (row._type === 'wbs') {
+        return { ...row, _wbs_color: wbsColorFn(row.level ?? 1) }
+      }
+      return row
+    })
+
+    setSceneActivities({
+      rows:           annotatedRows,
+      visCols:        cols.filter(c => c.visible).map(c => ({
+        key:   c.key,
+        label: c.label,
+        width: c.width,
+      })),
+      gantt_start:    ganttStart.toISOString(),
+      gantt_end:      ganttEnd.toISOString(),
+      project_start:  analysis.schedule_data?.project_start ?? null,
+      project_finish: analysis.schedule_data?.project_finish ?? null,
+      bar_colors:     { ...scheme },
+      bar_style:      tweaks.barStyle ?? 'filled',
+      bar_opacity:    (tweaks.barOpacity ?? 85) / 100,
+      bar_corner_radius: tweaks.barCornerRadius ?? 3,
+      row_height:     tweaks.rowHeight ?? rowHeight,
+      crit_only:      critOnly,
+      show_wbs_bands: showWbsBands,
+      scene_name:     null,   // resolved in App from SceneContext.activeSceneId + scenes list
+    })
+  }, [sortedRows, cols, tweaks, critOnly, showWbsBands, ganttStart, ganttEnd])
 
   const handleGoTo = useCallback((id) => {
     // ── Rule 1: Resolve the target activity ──────────────────────────────────

@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  /*
+   * SKOPIA Lens — Schedule Scene Export Template (v1.0)
+   *
+   * PIPELINE: Scene Export (POST /api/export/scene)
+   * This template renders ONLY what the frontend provides.
+   * No server-side reconstruction of filters, grouping, or activity visibility.
+   *
+   * PAGE STRUCTURE:
+   *   Page 1  — Cover: header + scene info + summary strip
+   *   Pages 2+— Schedule table with WBS bands + inline Gantt bars
+   *             (WeasyPrint paginates the table automatically)
+   *
+   * WEASYPRINT CONSTRAINTS STRICTLY OBSERVED:
+   *   ✗ No CSS Grid
+   *   ✗ No -webkit-background-clip: text
+   *   ✗ No border-image
+   *   ✗ No canvas / JavaScript
+   *   ✓ Flex layouts throughout
+   *   ✓ Inline SVG for Gantt bars (pre-rendered in pdf_export.py)
+   *   ✓ Google Fonts via @import CDN
+   *   ✓ @page running headers/footers
+   *   ✓ page-break-before / page-break-inside: avoid
+   */
+
+  @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&family=Open+Sans:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  /* ══ PAGE SETUP ═══════════════════════════════════════════════════════════ */
+
+  @page {
+    size: {{ css_page_size }};
+    margin: 10mm 12mm 14mm 12mm;
+
+    @bottom-left {
+      content: "SKOPIA Lens  ·  Schedule Export  ·  {{ scene_name }}  ·  Confidential";
+      font-family: 'Open Sans', Arial, sans-serif;
+      font-size: 6.5pt;
+      color: #9CA3AF;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 6.5pt;
+      color: #9CA3AF;
+    }
+  }
+
+  /* Cover page — no running footer */
+  @page :first {
+    @bottom-left  { content: ""; }
+    @bottom-right { content: ""; }
+  }
+
+  /* ══ BRAND TOKENS ═════════════════════════════════════════════════════════ */
+
+  :root {
+    --sk-cyan:   #1EC8D4;
+    --sk-peri:   #4A6FE8;
+    --sk-blue:   #2A4DCC;
+    --sk-header: #1E1E1E;
+    --sk-bg:     #F7F8FC;
+    --sk-card:   #FFFFFF;
+    --sk-border: #E2E6F0;
+    --sk-text:   #1A1A2E;
+    --sk-muted:  #6B7280;
+    --sk-pass:   #16A34A;
+    --sk-warn:   #D97706;
+    --sk-fail:   #DC2626;
+    --sk-info:   #2563EB;
+    --grad:      linear-gradient(135deg, #1EC8D4, #4A6FE8, #2A4DCC);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 8pt;
+    color: var(--sk-text);
+    background: #FFFFFF;
+  }
+
+  /* ══ COVER — HEADER ══════════════════════════════════════════════════════ */
+
+  .doc-header {
+    background: var(--sk-header);
+    padding: 12px 16px 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .wordmark {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 20pt;
+    font-weight: 900;
+    /* WeasyPrint does not support -webkit-background-clip: text.
+       Use a solid brand colour instead. */
+    color: var(--sk-cyan);
+    letter-spacing: -0.5px;
+    line-height: 1;
+  }
+
+  .wordmark-tier {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 7pt;
+    color: #94a3b8;
+    margin-top: 3px;
+  }
+
+  .doc-meta {
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7pt;
+    color: #94a3b8;
+    line-height: 1.8;
+  }
+
+  .doc-meta strong { color: #e2e8f0; font-weight: 500; }
+
+  /* gradient accent strip */
+  .grad-strip {
+    height: 3px;
+    background: linear-gradient(to right, #1EC8D4, #4A6FE8, #2A4DCC);
+    margin-bottom: 10px;
+  }
+
+  /* ══ SCENE INFO BLOCK ════════════════════════════════════════════════════ */
+
+  .scene-info {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    margin: 6px 0 4px;
+  }
+
+  .scene-badge {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 7pt;
+    font-weight: 700;
+    color: #FFFFFF;
+    background: linear-gradient(135deg, #4A6FE8, #2A4DCC);
+    border-radius: 3px;
+    padding: 2px 7px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .scene-name-text {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-size: 11pt;
+    font-weight: 700;
+    color: var(--sk-text);
+  }
+
+  /* ══ SUMMARY STRIP ═══════════════════════════════════════════════════════ */
+
+  .summary-strip {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0 0;
+    flex-wrap: wrap;
+  }
+
+  .summary-chip {
+    background: var(--sk-bg);
+    border: 1px solid var(--sk-border);
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 7pt;
+  }
+
+  .summary-chip .chip-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9pt;
+    font-weight: 500;
+    color: var(--sk-text);
+    display: block;
+  }
+
+  .summary-chip .chip-lbl {
+    font-size: 6pt;
+    color: var(--sk-muted);
+    display: block;
+    margin-top: 1px;
+  }
+
+  /* ══ COVER FOOTER ════════════════════════════════════════════════════════ */
+
+  .doc-footer {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 6.5pt;
+    color: var(--sk-muted);
+    border-top: 1px solid var(--sk-border);
+    padding-top: 5px;
+    margin-top: 10px;
+  }
+
+  /* ══ PAGE BREAK ══════════════════════════════════════════════════════════ */
+
+  .page-break {
+    page-break-before: always;
+  }
+
+  /* ══ SCHEDULE TABLE ══════════════════════════════════════════════════════ */
+
+  /*
+   * The table uses table-layout:fixed with explicit column widths supplied
+   * by vis_cols. The final "Gantt" column takes remaining width via flex
+   * (approximated with a large % in fixed layout).
+   *
+   * WeasyPrint note: table-layout:fixed + explicit width on <col> or <th>
+   * is the only reliable way to get stable column widths.
+   */
+
+  .scene-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 6.5pt;
+    font-family: 'Open Sans', Arial, sans-serif;
+    table-layout: fixed;
+    page-break-inside: auto;
+  }
+
+  .scene-table thead {
+    display: table-header-group;   /* repeat header on every page */
+  }
+
+  .scene-table thead th {
+    background: var(--sk-header);
+    color: #E2E8F0;
+    padding: 4px 5px;
+    text-align: left;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 5.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .scene-table thead th.right { text-align: right; }
+
+  .scene-table tbody td {
+    padding: 2px 5px;
+    border-bottom: 1px solid var(--sk-border);
+    vertical-align: middle;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .scene-table tbody tr:nth-child(even) td { background: #FAFBFF; }
+
+  /* WBS band header rows */
+  .wbs-row td {
+    background: var(--wbs-bg, #EEF2FF) !important;
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 6.5pt;
+    color: var(--wbs-text, var(--sk-peri));
+    padding: 3px 5px;
+    border-bottom: 1px solid var(--wbs-border, #C7D2FE);
+    page-break-after: avoid;
+  }
+
+  /* Critical + complete row styles */
+  .crit-row td { background: #FFF5F5 !important; }
+  .done-row td { color: var(--sk-muted) !important; }
+
+  /* Gantt column — fixed width, SVG fills it */
+  .gantt-col { padding: 1px 3px !important; }
+
+  /* ══ SECTION TITLE ═══════════════════════════════════════════════════════ */
+
+  .section-title {
+    font-family: 'Montserrat', Arial, sans-serif;
+    font-weight: 700;
+    font-size: 10pt;
+    color: var(--sk-text);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .section-pip {
+    display: inline-block;
+    width: 3px;
+    height: 14px;
+    background: linear-gradient(to bottom, #1EC8D4, #2A4DCC);
+    border-radius: 2px;
+  }
+
+  /* ══ SCENE TABLE INFO BAR ════════════════════════════════════════════════ */
+
+  .scene-header-info {
+    font-family: 'Open Sans', Arial, sans-serif;
+    font-size: 7pt;
+    color: var(--sk-muted);
+    background: var(--sk-bg);
+    border: 1px solid var(--sk-border);
+    border-radius: 3px;
+    padding: 5px 8px;
+    margin-bottom: 6px;
+  }
+
+  .scene-header-info strong { color: var(--sk-text); }
+
+</style>
+</head>
+<body>
+
+{# ═══════════════════════════════════════════════════════════════════════════
+   PAGE 1 — COVER
+   Header + scene info + summary strip + cover footer
+════════════════════════════════════════════════════════════════════════════ #}
+
+<div class="doc-header">
+  <div>
+    <div class="wordmark">SKOPIA.</div>
+    <div class="wordmark-tier">Schedule Export &nbsp;·&nbsp; Lens v0.9</div>
+  </div>
+  <div class="doc-meta">
+    <strong>{{ project_name }}</strong><br>
+    {% if company_name %}{{ company_name }}<br>{% endif %}
+    Project: {{ project_start }} → {{ project_finish }}<br>
+    Generated: {{ generated_at }}
+  </div>
+</div>
+<div class="grad-strip"></div>
+
+<div class="scene-info">
+  <span class="scene-badge">Scene</span>
+  <span class="scene-name-text">{{ scene_name }}</span>
+</div>
+
+<div class="summary-strip">
+  <div class="summary-chip">
+    <span class="chip-val">{{ row_count | format_num }}</span>
+    <span class="chip-lbl">Activities</span>
+  </div>
+  <div class="summary-chip">
+    <span class="chip-val">{{ vis_cols | length }}</span>
+    <span class="chip-lbl">Columns</span>
+  </div>
+  <div class="summary-chip">
+    <span class="chip-val">{{ project_start }}</span>
+    <span class="chip-lbl">Project Start</span>
+  </div>
+  <div class="summary-chip">
+    <span class="chip-val">{{ project_finish }}</span>
+    <span class="chip-lbl">Project Finish</span>
+  </div>
+</div>
+
+<div class="doc-footer">
+  <span>SKOPIA Lens &nbsp;·&nbsp; Schedule Export &nbsp;·&nbsp; {{ scene_name }} &nbsp;·&nbsp; Confidential</span>
+  <span>Generated {{ generated_at }}</span>
+</div>
+
+
+{# ═══════════════════════════════════════════════════════════════════════════
+   PAGES 2+ — SCHEDULE TABLE
+   Rows are supplied in display order by the frontend (rows[]).
+   Each row is either _type:'task' or _type:'wbs' (band header).
+   WBS rows carry _wbs_color from the frontend scheme.
+   Gantt bar SVGs are pre-rendered per task row in _render_scene_pdf().
+════════════════════════════════════════════════════════════════════════════ #}
+
+{% if rows %}
+<div class="page-break">
+
+  <div class="section-title">
+    <span class="section-pip"></span>Schedule — {{ scene_name }}
+  </div>
+
+  <div class="scene-header-info">
+    <strong>{{ row_count | format_num }} activities</strong> in this Scene.
+    Critical activities are highlighted. Gantt bars scaled to project timescale
+    ({{ project_start }} → {{ project_finish }}).
+  </div>
+
+  <table class="scene-table">
+
+    {# ── Fixed column widths via <col> elements ── #}
+    {# Widths are supplied as px from ScheduleView visCols.                   #}
+    {# We convert to percentage of a nominal 900pt page width for WeasyPrint.  #}
+    {# The Gantt column always gets remaining space.                            #}
+    {% set total_col_width = vis_cols | sum(attribute='width') %}
+    {% set gantt_nominal_px = 200 %}
+    {% set grand_total = total_col_width + gantt_nominal_px %}
+    <colgroup>
+      {% for col in vis_cols %}
+        <col style="width: {{ ((col.width / grand_total) * 100) | round(1) }}%">
+      {% endfor %}
+      {# Gantt column — gets remaining width #}
+      <col style="width: {{ ((gantt_nominal_px / grand_total) * 100) | round(1) }}%">
+    </colgroup>
+
+    <thead>
+      <tr>
+        {% for col in vis_cols %}
+          <th>{{ col.label }}</th>
+        {% endfor %}
+        <th>Gantt</th>
+      </tr>
+    </thead>
+
+    <tbody>
+      {% for row in rows %}
+
+        {% if row._type == 'wbs' %}
+          {# ── WBS band header row ── #}
+          {# _wbs_color is pre-resolved by ScheduleView to the correct scheme colour. #}
+          {% set wbs_col = row._wbs_color | default('#4A6FE8') %}
+          {# Derive light background: colour at ~15% opacity over white.             #}
+          {# WeasyPrint supports rgba() in background — use it directly.             #}
+          <tr class="wbs-row" style="
+            --wbs-bg:     {{ wbs_col }}26;
+            --wbs-border: {{ wbs_col }}40;
+            --wbs-text:   {{ wbs_col }};
+          ">
+            {# Span all vis_cols + Gantt column #}
+            <td colspan="{{ vis_cols | length + 1 }}" style="color: {{ wbs_col }};">
+              ▸ {{ row.name | truncate(110) }}
+            </td>
+          </tr>
+
+        {% else %}
+          {# ── Task row ── #}
+          {% set is_critical = row.critical or (row.total_float is not none and row.total_float <= 0) %}
+          {% set is_complete = row.status in ('Complete', 'completed') or row.pct == 100 %}
+          {% set is_mile     = row.type == 'milestone' or (row.rem_dur is not none and row.rem_dur == 0) %}
+
+          <tr class="{% if is_critical and not is_complete %}crit-row{% elif is_complete %}done-row{% endif %}">
+
+            {% for col in vis_cols %}
+              {% set k = col.key %}
+              <td style="
+                {% if k in ('id',) %}
+                  font-family:'JetBrains Mono',monospace; font-size:5.5pt;
+                  color: {% if is_critical and not is_complete %}var(--sk-fail){% else %}var(--sk-peri){% endif %};
+                {% elif k in ('start','finish','base_start','base_finish','act_start','act_finish','exp_finish','var_bl_start','var_bl_finish') %}
+                  font-family:'JetBrains Mono',monospace; font-size:5.5pt;
+                {% elif k in ('rem_dur','orig_dur','total_float','free_float') %}
+                  font-family:'JetBrains Mono',monospace; font-size:5.5pt; text-align:right;
+                  {% if k == 'total_float' %}
+                    color: {% if row.total_float is not none and row.total_float < 0 %}var(--sk-fail)
+                           {% elif row.total_float is not none and row.total_float == 0 %}var(--sk-warn)
+                           {% else %}var(--sk-muted){% endif %};
+                  {% endif %}
+                {% elif k == 'name' %}
+                  font-size:6.5pt;
+                {% else %}
+                  font-size:6pt; color: var(--sk-muted);
+                {% endif %}
+              ">
+                {# ── Cell value by column key ── #}
+                {% if k == 'name' %}
+                  {% if is_mile %}<span style="color:var(--sk-peri);font-size:6pt;">◆ </span>{% endif %}
+                  {{ row.name | truncate(50) }}
+
+                {% elif k in ('start','finish') %}
+                  {% if k == 'start'  %}{{ row.start  | format_date }}{% endif %}
+                  {% if k == 'finish' %}{{ row.finish | format_date }}{% endif %}
+
+                {% elif k == 'base_start'   %}{{ row.base_start   | format_date }}
+                {% elif k == 'base_finish'  %}{{ row.base_finish  | format_date }}
+                {% elif k == 'act_start'    %}{{ row.act_start    | format_date }}
+                {% elif k == 'act_finish'   %}{{ row.act_finish   | format_date }}
+                {% elif k == 'exp_finish'   %}{{ row.exp_finish   | format_date }}
+
+                {% elif k == 'var_bl_start' %}
+                  {% if row.var_bl_start is defined and row.var_bl_start is not none %}
+                    {{ row.var_bl_start }}d
+                  {% else %}—{% endif %}
+
+                {% elif k == 'var_bl_finish' %}
+                  {% if row.var_bl_finish is defined and row.var_bl_finish is not none %}
+                    {{ row.var_bl_finish }}d
+                  {% else %}—{% endif %}
+
+                {% elif k == 'rem_dur' %}
+                  {% if row.rem_dur is not none %}{{ row.rem_dur }}d{% else %}—{% endif %}
+
+                {% elif k == 'orig_dur' %}
+                  {% if row.orig_dur is not none %}{{ row.orig_dur }}d{% else %}—{% endif %}
+
+                {% elif k == 'total_float' %}
+                  {% if row.total_float is not none %}{{ row.total_float }}d{% else %}—{% endif %}
+
+                {% elif k == 'free_float' %}
+                  {% if row.free_float is not none %}{{ row.free_float }}d{% else %}—{% endif %}
+
+                {% elif k == 'status' %}
+                  {% if is_complete %}
+                    <span style="color:var(--sk-pass);">✓ Done</span>
+                  {% elif row.status in ('In Progress',) or (row.pct is not none and row.pct > 0) %}
+                    <span style="color:var(--sk-warn);">▶ In Progress</span>
+                  {% elif is_critical %}
+                    <span style="color:var(--sk-fail);font-weight:600;">● Critical</span>
+                  {% else %}
+                    <span style="color:var(--sk-muted);">○ Not Started</span>
+                  {% endif %}
+
+                {% elif k == 'type'     %}{{ row.type     | default('—') }}
+                {% elif k == 'calendar' %}{{ row.calendar | default('—') | truncate(20) }}
+                {% elif k == 'cstr_type'%}{{ row.cstr_type | default('—') }}
+                {% else %}—
+                {% endif %}
+
+              </td>
+            {% endfor %}
+
+            {# Gantt bar column — SVG pre-rendered by backend #}
+            <td class="gantt-col">
+              {% if row._gantt_svg %}{{ row._gantt_svg | safe }}{% endif %}
+            </td>
+
+          </tr>
+        {% endif %}
+
+      {% endfor %}
+    </tbody>
+  </table>
+
+</div>
+{% endif %}{# /rows #}
+
+
+</body>
+</html>

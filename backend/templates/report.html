@@ -4,13 +4,16 @@
 <meta charset="UTF-8">
 <style>
   /*
-   * SKOPIA Lens — PDF Report Template (v3.0)
+   * SKOPIA Lens — PDF Report Template (v3.1)
+   *
+   * PIPELINE: Executive Report (POST /api/export/pdf)
+   * This template renders ONLY executive report content.
+   * Schedule/Gantt export is handled by schedule_export.html via /api/export/scene.
    *
    * PAGE STRUCTURE:
    *   Page 1  — Cover: Header · Grade ring + stat tiles · Two-col (checks table | spider chart) · Actions Required
    *   Page 2  — Helios AI Insights (health / baseline / forensic) — conditional
    *   Pages 3+— Per-check detail pages (one per check in checks[])
-   *   Pages N+— Schedule Table with inline Gantt bars — conditional on _scene_data
    *
    * WEASYPRINT CONSTRAINTS STRICTLY OBSERVED:
    *   ✗ No CSS Grid
@@ -769,67 +772,6 @@
 
   .bot-table tbody tr:nth-child(even) td { background: #FAFBFF; }
 
-  /* ══ SCHEDULE TABLE PAGES ══════════════════════════════════════════════════ */
-
-  .scene-header-info {
-    background: #EFF6FF;
-    border-left: 4px solid var(--sk-info);
-    border-radius: 4px;
-    padding: 7px 10px;
-    margin-bottom: 10px;
-    font-size: 7.5pt;
-    color: #1E3A8A;
-    page-break-inside: avoid;
-  }
-
-  /* Two-pane scene layout: table left, Gantt SVG right */
-  .scene-row-wrap {
-    display: flex;
-    align-items: stretch;
-    border-bottom: 1px solid var(--sk-border);
-  }
-
-  .scene-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 6.5pt;
-  }
-
-  .scene-table thead th {
-    background: var(--sk-header);
-    color: #E2E8F0;
-    padding: 4px 5px;
-    text-align: left;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 5.5pt;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    font-weight: 400;
-  }
-
-  .scene-table thead th.right { text-align: right; }
-
-  .scene-table tbody td {
-    padding: 2px 5px;
-    border-bottom: 1px solid var(--sk-border);
-    vertical-align: middle;
-  }
-
-  .scene-table tbody tr:nth-child(even) td { background: #FAFBFF; }
-
-  .scene-table .wbs-row td {
-    background: #EEF2FF !important;
-    font-family: 'Montserrat', Arial, sans-serif;
-    font-weight: 700;
-    font-size: 6.5pt;
-    color: var(--sk-peri);
-    padding: 3px 5px;
-    border-bottom: 1px solid #C7D2FE;
-  }
-
-  .scene-table .crit-row td { background: #FFF5F5 !important; }
-  .scene-table .done-row td { color: var(--sk-muted) !important; }
-
   /* ══ CALLOUT SHARED ═══════════════════════════════════════════════════════ */
 
   .callout {
@@ -1443,139 +1385,6 @@
 </div>{# /page-break #}
 {% endfor %}{# /for check in checks #}
 
-
-{# ═══════════════════════════════════════════════════════════════════════════
-   PAGES N+ — SCHEDULE TABLE (conditional on scene_activities)
-   One activity per row. Gantt bar SVG pre-rendered per row in pdf_export.py.
-   WeasyPrint paginates the table rows automatically.
-═══════════════════════════════════════════════════════════════════════════ #}
-
-{% if scene_activities %}
-<div class="page-break">
-
-  <div class="section-title">
-    <span class="section-pip"></span>Schedule — Activity Table
-  </div>
-
-  <div class="scene-header-info">
-    <strong>{{ scene_activities | length | format_num }} activities</strong>
-    shown from the active Scene.
-    Critical activities are highlighted. Gantt bars scaled to project timescale.
-    {% if schedule_data %}
-      Project span: {{ schedule_data.project_start | format_date }} → {{ schedule_data.project_finish | format_date }}.
-    {% endif %}
-  </div>
-
-  {# Build WBS name lookup from schedule_data #}
-  {% set wbs_map = {} %}
-  {% if schedule_data and schedule_data.wbs_nodes %}
-    {% for w in schedule_data.wbs_nodes %}
-      {% if wbs_map.update({w.id: w.name}) %}{% endif %}
-    {% endfor %}
-  {% endif %}
-
-  {# Track current WBS band for banded display #}
-  {% set ns = namespace(current_wbs='__NONE__') %}
-
-  {# Two-pane layout: table (left) + Gantt SVGs (right) #}
-  {# WeasyPrint doesn't support position:sticky; we use a fixed-width right column #}
-
-  <table class="scene-table">
-    <thead>
-      <tr>
-        <th style="width:13%">Activity ID</th>
-        <th style="width:26%">Activity Name</th>
-        <th style="width:9%" class="right">Duration</th>
-        <th style="width:10%">Start</th>
-        <th style="width:10%">Finish</th>
-        <th style="width:8%" class="right">Float</th>
-        <th style="width:10%">Status</th>
-        <th style="width:14%">Gantt</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for act in scene_activities %}
-
-        {# WBS band header row #}
-        {% if act.wbs != ns.current_wbs %}
-          {% set ns.current_wbs = act.wbs %}
-          {% set band_name = wbs_map.get(act.wbs, act.wbs_name or act.wbs or '') %}
-          <tr class="wbs-row">
-            <td colspan="8">▸ {{ band_name | truncate(90) }}</td>
-          </tr>
-        {% endif %}
-
-        {# Determine row classes #}
-        {% set is_critical = act.critical or (act.total_float is not none and act.total_float <= 0) %}
-        {% set is_complete = act.status in ('Complete', 'completed') or act.pct == 100 %}
-
-        <tr class="{% if is_critical and not is_complete %}crit-row{% elif is_complete %}done-row{% endif %}">
-
-          {# Activity ID #}
-          <td style="font-family:'JetBrains Mono',monospace;font-size:6pt;
-                     color:{% if is_critical and not is_complete %}var(--sk-fail){% else %}var(--sk-peri){% endif %};">
-            {{ act.id }}
-          </td>
-
-          {# Name #}
-          <td style="font-size:6.5pt;">
-            {% if act.type == 'milestone' or (act.rem_dur is not none and act.rem_dur == 0) %}
-              <span style="color:var(--sk-peri);font-size:6pt;">◆ </span>
-            {% endif %}
-            {{ act.name | truncate(44) }}
-          </td>
-
-          {# Duration #}
-          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6pt;
-                     color:var(--sk-muted);">
-            {% if act.orig_dur is not none %}{{ act.orig_dur }}d{% else %}—{% endif %}
-          </td>
-
-          {# Start #}
-          <td style="font-family:'JetBrains Mono',monospace;font-size:6pt;">
-            {{ act.start | format_date }}
-          </td>
-
-          {# Finish #}
-          <td style="font-family:'JetBrains Mono',monospace;font-size:6pt;">
-            {{ act.finish | format_date }}
-          </td>
-
-          {# Total float #}
-          <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:6pt;
-                     color:{% if act.total_float is not none and act.total_float < 0 %}var(--sk-fail)
-                           {% elif act.total_float is not none and act.total_float == 0 %}var(--sk-warn)
-                           {% else %}var(--sk-muted){% endif %};">
-            {% if act.total_float is not none %}{{ act.total_float }}d{% else %}—{% endif %}
-          </td>
-
-          {# Status indicator #}
-          <td style="font-size:6.5pt;">
-            {% if is_complete %}
-              <span style="color:var(--sk-pass);">✓ Done</span>
-            {% elif act.status == 'In Progress' or (act.pct is not none and act.pct > 0) %}
-              <span style="color:var(--sk-warn);">▶ In Progress</span>
-            {% elif is_critical %}
-              <span style="color:var(--sk-fail);font-weight:600;">● Critical</span>
-            {% else %}
-              <span style="color:var(--sk-muted);">○ Not Started</span>
-            {% endif %}
-          </td>
-
-          {# Gantt bar — pre-rendered SVG from pdf_export.py #}
-          <td style="padding:1px 4px;">
-            {% if act._gantt_svg %}
-              {{ act._gantt_svg | safe }}
-            {% endif %}
-          </td>
-
-        </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-
-</div>
-{% endif %}{# /scene_activities #}
 
 
 </body>

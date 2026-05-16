@@ -129,3 +129,60 @@ export async function exportPdf(analysis, projectName = 'Schedule') {
   // the download before we revoke it
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
+/**
+ * exportScene — POST the scene view model to /api/export/scene and download the PDF.
+ *
+ * Scene pipeline — separate from exportPdf. The backend renders exactly what
+ * the frontend provides (rows, columns, styles). No activity reconstruction.
+ *
+ * @param {Object} scenePayload — The sceneExport object from ScheduleView via AnalysisContext
+ * @param {string} projectName  — Display name used in the fallback filename
+ * @returns {Promise<void>}     — Resolves when the download starts
+ * @throws  {Error}             — On network failure or non-2xx HTTP status
+ */
+export async function exportScene(scenePayload, projectName = 'Schedule') {
+  let response
+  try {
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
+    response = await fetch(`${API_BASE}/api/export/scene`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(scenePayload),
+    })
+  } catch (networkErr) {
+    throw new Error(
+      'Could not reach the SKOPIA Lens backend. ' +
+      'Make sure the server is running.'
+    )
+  }
+
+  if (!response.ok) {
+    let msg = `HTTP ${response.status}`
+    try {
+      const errBody = await response.json()
+      msg = errBody?.detail?.message || errBody?.detail || msg
+    } catch (_) { /* ignore parse errors on error bodies */ }
+    throw new Error(msg)
+  }
+
+  const blob = await response.blob()
+
+  // Prefer the server-supplied filename from Content-Disposition.
+  // Fall back to a generated name using the project name + today's date.
+  const cd        = response.headers.get('Content-Disposition') || ''
+  const nameMatch = cd.match(/filename="([^"]+)"/)
+  const filename  = nameMatch
+    ? nameMatch[1]
+    : `SKOPIA_Scene_${projectName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 40)}_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.pdf`
+
+  const url = URL.createObjectURL(blob)
+  const a   = document.createElement('a')
+  a.href     = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+
+  setTimeout(() => URL.revokeObjectURL(url), 5000)
+}

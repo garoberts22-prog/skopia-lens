@@ -787,3 +787,263 @@ async def export_pdf(analysis: dict[str, Any]):
             "Content-Length":      str(len(pdf_bytes)),
         },
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SCENE EXPORT — dedicated pipeline for ScheduleView snapshot PDFs
+#
+# This renderer accepts the pre-resolved view model from the frontend.
+# It NEVER reconstructs filters, grouping, or activity visibility from raw
+# schedule data. The frontend is the source of truth.
+#
+# Input payload shape (matches ScheduleView sceneExport object):
+#   rows            list of row objects in display order:
+#                     {_type:'task'|'wbs', id, name, ...activity fields,
+#                      _wbs_color (wbs rows only)}
+#   visCols         [{key, label, width}] — visible columns in order
+#   gantt_start     ISO string — timeline start
+#   gantt_end       ISO string — timeline end
+#   project_start   ISO string — project start (for Gantt scaling)
+#   project_finish  ISO string — project finish
+#   bar_colors      {normal, critical, complete} hex strings
+#   bar_style       'filled'|'outline'
+#   bar_opacity     0.0–1.0
+#   bar_corner_radius  int px
+#   row_height      int px
+#   crit_only       bool
+#   show_wbs_bands  bool
+#   scene_name      str — displayed in PDF header
+#   project_name    str
+#   company_name    str | null
+#   page_settings   {size, orientation, css_size}
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_scene_row_svg(row: dict, ps_iso: str, pf_iso: str, bar_colors: dict,
+                          bar_style: str, bar_opacity: float, corner_radius: int,
+                          row_h: int) -> str:
+    """
+    Render a single Gantt bar SVG for one activity row.
+    WBS rows have no bar — returns empty string.
+    Milestone (rem_dur == 0 or type == 'milestone') → diamond marker.
+    """
+    if row.get("_type") == "wbs":
+        return ""
+
+    W = 300
+    h = max(4, row_h - 6)    # bar height within row padding
+
+    try:
+        ps = datetime.fromisoformat(str(ps_iso).replace("Z", ""))
+        pf = datetime.fromisoformat(str(pf_iso).replace("Z", ""))
+    except (ValueError, TypeError):
+        return ""
+
+    total_days = max(1, (pf - ps).days)
+
+    start_str  = row.get("start",  "") or ""
+    finish_str = row.get("finish", "") or ""
+    try:
+        a_start  = datetime.fromisoformat(str(start_str).replace("Z",  ""))
+        a_finish = datetime.fromisoformat(str(finish_str).replace("Z", ""))
+    except (ValueError, TypeError):
+        return ""
+
+    x1 = max(0, int(((a_start - ps).days  / total_days) * W))
+    x2 = min(W, int(((a_finish - ps).days / total_days) * W))
+    bw = max(2, x2 - x1)
+
+    # Colour
+    is_complete = (str(row.get("status","")).lower() in ("complete","completed")
+                   or float(row.get("pct", 0) or 0) >= 100)
+    is_critical = (row.get("critical", False)
+                   or (row.get("total_float") is not None
+                       and float(row.get("total_float", 1)) <= 0))
+
+    col = (bar_colors.get("complete", "#16A34A") if is_complete
+           else bar_colors.get("critical", "#DC2626") if is_critical
+           else bar_colors.get("normal",   "#02787C"))
+
+    # Milestone diamond
+    is_mile = (str(row.get("type","")).lower() == "milestone"
+               or (row.get("rem_dur") is not None and float(row.get("rem_dur",1)) == 0))
+
+    SVG_H = row_h
+    mid_y = SVG_H // 2
+    lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {SVG_H}" '
+        f'width="{W}" height="{SVG_H}" style="display:block;">'
+    ]
+
+    if is_mile:
+        d = max(3, SVG_H // 3)
+        lines.append(
+            f'<polygon points="{x1},{mid_y-d} {x1+d},{mid_y} {x1},{mid_y+d} {x1-d},{mid_y}" '
+            f'fill="{col}"/>'
+        )
+    else:
+        y_bar = (SVG_H - h) // 2
+        rx = min(corner_radius, h // 2)
+        if bar_style == "outline":
+            lines.append(
+                f'<rect x="{x1}" y="{y_bar}" width="{bw}" height="{h}" '
+                f'rx="{rx}" fill="none" stroke="{col}" stroke-width="1.5" '
+                f'opacity="{bar_opacity:.2f}"/>'
+            )
+        else:
+            lines.append(
+                f'<rect x="{x1}" y="{y_bar}" width="{bw}" height="{h}" '
+                f'rx="{rx}" fill="{col}" opacity="{bar_opacity:.2f}"/>'
+            )
+
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def _render_scene_pdf(scene: dict) -> bytes:
+    """
+    Render the scene export payload → PDF via schedule_export.html.
+
+    The frontend has already resolved:
+      - which rows are visible (scene['rows'])
+      - which columns are visible (scene['visCols'])
+      - bar colours, styles, opacity
+      - gantt timeline range (gantt_start / gantt_end)
+
+    This function pre-renders per-row Gantt bar SVGs and passes everything
+    to the Jinja2 template. No activity filtering or grouping reconstruction.
+    """
+    if not WEASYPRINT_AVAILABLE:
+        raise RuntimeError(
+            "WeasyPrint is not installed. "
+            "Add 'weasyprint' to requirements.txt and system deps to Dockerfile."
+        )
+
+    rows        = scene.get("rows", [])
+    vis_cols    = scene.get("visCols", [])
+    gantt_start = scene.get("gantt_start") or scene.get("project_start", "")
+    gantt_end   = scene.get("gantt_end")   or scene.get("project_finish", "")
+    project_start  = scene.get("project_start", gantt_start)
+    project_finish = scene.get("project_finish", gantt_end)
+    bar_colors  = scene.get("bar_colors",  {"normal":"#02787C","critical":"#DC2626","complete":"#16A34A"})
+    bar_style   = scene.get("bar_style",   "filled")
+    bar_opacity = float(scene.get("bar_opacity", 0.85))
+    corner_radius = int(scene.get("bar_corner_radius", 3))
+    row_height  = int(scene.get("row_height", 26))
+    scene_name  = scene.get("scene_name")  or "Schedule Export"
+    project_name= scene.get("project_name","Untitled Schedule")
+    company_name= scene.get("company_name") or None
+    page_settings = scene.get("page_settings", {})
+
+    # ── Use project_start/project_finish as scaling anchors ──────────────────
+    # gantt_start/gantt_end from the frontend include ±1 month padding;
+    # we use project_start/finish for Gantt bar x-position calculations
+    # so bars are consistent with the live view.
+    scale_start = gantt_start or project_start
+    scale_end   = gantt_end   or project_finish
+
+    # ── Pre-render Gantt bar SVG per row ─────────────────────────────────────
+    rows_with_svg = []
+    for row in rows:
+        svg = _build_scene_row_svg(
+            row, scale_start, scale_end,
+            bar_colors, bar_style, bar_opacity, corner_radius, row_height,
+        )
+        rows_with_svg.append({**row, "_gantt_svg": svg})
+
+    # ── Format dates ──────────────────────────────────────────────────────────
+    def fmt_iso(s):
+        if not s: return "—"
+        try:
+            return datetime.fromisoformat(str(s).replace("Z","")).strftime("%-d %b %Y")
+        except (ValueError, AttributeError):
+            return str(s)[:10]
+
+    context = {
+        "rows":           rows_with_svg,
+        "vis_cols":       vis_cols,
+        "row_count":      sum(1 for r in rows if r.get("_type") == "task"),
+        "scene_name":     scene_name,
+        "project_name":   project_name,
+        "company_name":   company_name,
+        "project_start":  fmt_iso(project_start),
+        "project_finish": fmt_iso(project_finish),
+        "generated_at":   datetime.now().strftime("%-d %b %Y, %-I:%M%p"),
+        "bar_colors":     bar_colors,
+        "bar_style":      bar_style,
+        "row_height":     row_height,
+        "page_settings":  page_settings,
+        "css_page_size":  page_settings.get("css_size", "A4 landscape"),
+    }
+
+    template  = jinja_env.get_template("schedule_export.html")
+    html_str  = template.render(**context)
+    pdf_bytes = WeasyHTML(
+        string=html_str,
+        base_url=str(TEMPLATE_DIR),
+    ).write_pdf()
+
+    return pdf_bytes
+
+
+@router.post(
+    "/api/export/scene",
+    response_class=StreamingResponse,
+    summary="Export ScheduleView scene snapshot as PDF",
+    description=(
+        "Accepts the pre-resolved scene view model from ScheduleView and renders\n"
+        "it as a PDF via schedule_export.html.\n\n"
+        "The backend NEVER reconstructs activity visibility, grouping, or filters.\n"
+        "The frontend is the source of truth — rows, columns, and styles are used\n"
+        "exactly as supplied.\n\n"
+        "Required payload keys:\n"
+        "  rows      — all visible rows in display order (_type:'task'|'wbs')\n"
+        "  visCols   — [{key, label, width}] visible columns in order\n"
+        "  gantt_start / gantt_end — ISO timeline range\n"
+        "  project_start / project_finish — ISO schedule span\n"
+        "  bar_colors / bar_style / bar_opacity / bar_corner_radius — styles\n"
+        "  row_height, scene_name, project_name, company_name, page_settings"
+    ),
+)
+async def export_scene(scene: dict[str, Any]):
+    """
+    POST /api/export/scene
+    Body  : sceneExport object from ScheduleView (JSON)
+    Returns: application/pdf binary download
+    """
+    if not scene or not scene.get("rows"):
+        raise HTTPException(status_code=400, detail={
+            "error": "missing_payload",
+            "message": "Request body must be the sceneExport object from ScheduleView.",
+        })
+
+    try:
+        pdf_bytes = _render_scene_pdf(scene)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail={
+            "error": "pdf_unavailable",
+            "message": str(e),
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={
+            "error": "scene_render_error",
+            "message": f"Scene PDF generation failed: {str(e)}",
+        })
+
+    project_name = scene.get("project_name", "Schedule")
+    safe_name = "".join(
+        c if c.isalnum() or c in "._- " else "_" for c in project_name
+    )
+    safe_name = safe_name.strip().replace(" ", "_")[:40]
+    scene_name = (scene.get("scene_name") or "Scene").replace(" ", "_")[:20]
+    date_str  = datetime.now().strftime("%Y%m%d")
+    filename  = f"SKOPIA_Scene_{safe_name}_{scene_name}_{date_str}.pdf"
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length":      str(len(pdf_bytes)),
+        },
+    )
+

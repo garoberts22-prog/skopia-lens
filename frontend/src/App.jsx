@@ -25,7 +25,8 @@
 
 import { useState, useMemo, useCallback } from 'react'
 import { useAnalysis }   from './context/AnalysisContext'
-import { exportPdf }     from './api'
+import { exportPdf, exportScene } from './api'
+import { useScene }    from './context/SceneContext'
 import NavPanel          from './components/NavPanel'
 import UploadView        from './pages/UploadView'
 import HealthCheckView   from './pages/HealthCheckView'
@@ -455,7 +456,7 @@ ${pages.join('\n')}
 //   longest_path   — Critical Path Trace
 //   analytics      — Analytics
 // ─────────────────────────────────────────────────────────────────────────────
-function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivitiesProp, onClose }) {
+function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivitiesProp, activeSceneName, onClose }) {
   const hasScheduleData = !!(analysis?.schedule_data?.activities?.length)
   // Include all three Helios modes — forensic-only is valid (no health/baseline required)
   const hasHelios       = !!(heliosInsightsProp?.health || heliosInsightsProp?.baseline || heliosInsightsProp?.forensic)
@@ -466,26 +467,42 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
   const [error,           setError]           = useState(null)
   const [success,         setSuccess]         = useState(false)
   const [previewLoading,  setPreviewLoading]  = useState(false)
-  const [contentOpen,     setContentOpen]     = useState(true)   // Content accordion — open by default
+  const [execOpen,        setExecOpen]        = useState(true)   // Executive Report accordion
+  const [schedOpen,       setSchedOpen]       = useState(true)   // Schedule accordion
   const [advancedOpen,    setAdvancedOpen]    = useState(false)  // Page Settings accordion
   const [zoomPct,         setZoomPct]         = useState(75)     // Preview zoom 50–150
 
-  // Content section toggles — only sections that are still in the report
+  // Executive report section toggles (summary / helios / check_details only)
+  // schedule_data is controlled separately via scheduleEnabled below
   const [sections, setSections] = useState({
     summary:       true,
-    helios:        hasHelios,        // default-on only if insights exist
+    helios:        hasHelios,   // default-on only if insights exist
     check_details: true,
-    schedule_data: hasScheduleData,  // default-on only if schedule data exists
   })
+
+  // Schedule pipeline toggle — independent of executive sections
+  const [scheduleEnabled, setScheduleEnabled] = useState(hasScheduleData)
+
+  // ── Export mode radio — 'exec' | 'schedule' ───────────────────────────────
+  // Single source of truth for which pipeline is active.
+  // Switching to 'schedule' automatically unchecks all exec child sections.
+  // Switching to 'exec' turns exec sections back to their last state.
+  const [exportMode, setExportMode] = useState(
+    hasScheduleData ? 'schedule' : 'exec'   // default to schedule when data exists
+  )
+
+  // Convenience booleans derived from exportMode
+  const execActive  = exportMode === 'exec'
+  const schedActive = exportMode === 'schedule'
 
   // Page settings (moved into Advanced Settings accordion)
   const [pageSize,        setPageSize]        = useState('A4')
   const [pageOrientation, setPageOrientation] = useState('landscape')
 
-  // ── Section definitions — ordered as they appear in PDF ───────────────────
+  // ── Executive report section definitions ──────────────────────────────────
   //
-  // Critical Path Trace and Analytics are always included — they are not
-  // user-togglable (removed from report structure). Only four sections remain.
+  // schedule_data is NOT in this list — it's a separate pipeline with its own
+  // toggle (scheduleEnabled) rendered in the Schedule accordion below.
   const SECTIONS = [
     {
       key:       'summary',
@@ -510,15 +527,6 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
       icon:      '③',
       available: true,
     },
-    {
-      key:       'schedule_data',
-      label:     'Schedule Table & Gantt',
-      desc:      hasScheduleData
-        ? 'Full activity listing with start, finish, duration, float, and status — reflects the active Scene'
-        : 'No schedule data available — upload a schedule file to enable this section',
-      icon:      '④',
-      available: hasScheduleData,
-    },
   ]
 
   // ── Page size options ──────────────────────────────────────────────────────
@@ -530,10 +538,26 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
   ]
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  // Switch to Executive Report mode — restores exec section toggles
+  function selectExecMode() {
+    setExportMode('exec')
+  }
+
+  // Switch to Schedule mode — clears exec child selections
+  function selectScheduleMode() {
+    if (!hasScheduleData) return
+    setExportMode('schedule')
+    // Uncheck all exec child sections when switching to schedule
+    setSections({ summary: false, helios: false, check_details: false })
+  }
+
+  // Toggle an individual exec child section (only active when in exec mode)
   function toggleSection(key) {
+    if (!execActive) return
     setSections(prev => {
       const next  = { ...prev, [key]: !prev[key] }
-      // Prevent unchecking all sections
+      // Always keep at least one exec section checked
       const anyOn = Object.values(next).some(Boolean)
       if (!anyOn) return prev
       return next
@@ -541,97 +565,137 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
   }
 
   // ── Preview HTML — memoised on section / company / page settings changes ───
-  // Re-builds whenever any control changes so the iframe stays in sync.
   const previewHtml = useMemo(() => {
     return buildPreviewHtml({
-      sections,
-      sectionDefs: SECTIONS,
+      sections: { ...sections, schedule_data: scheduleEnabled },
+      sectionDefs: [...SECTIONS, {
+        key: 'schedule_data', label: 'Schedule Table & Gantt', available: hasScheduleData,
+      }],
       companyName,
       projectName: analysis?.project_name ?? 'Schedule',
       pageSize,
       pageOrientation,
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections, companyName, pageSize, pageOrientation, hasHelios, hasScheduleData])
+  }, [sections, scheduleEnabled, companyName, pageSize, pageOrientation, hasHelios, hasScheduleData])
 
-  // ── Export handler ─────────────────────────────────────────────────────────
+  // ── Export handler — dual pipeline ────────────────────────────────────────
+  //
+  // Two independent rendering pipelines:
+  //
+  //   EXECUTIVE PIPELINE  → POST /api/export/pdf  → report.html (WeasyPrint)
+  //     Triggered when: summary, helios, or check_details sections are checked.
+  //     Payload: full analysis JSON with stripped/included sections.
+  //
+  //   SCENE PIPELINE      → POST /api/export/scene → schedule_export.html (WeasyPrint)
+  //     Triggered when: schedule_data section is checked.
+  //     Payload: resolved sceneExport view model (rows, cols, gantt range, styles).
+  //     The backend renders ONLY what the frontend provides — no reconstruction.
+  //
+  // If both are checked, both PDFs are generated sequentially and downloaded.
+  // ──────────────────────────────────────────────────────────────────────────
   async function handleGenerate() {
     setError(null)
     setLoading(true)
 
-    const payload = { ...analysis }
-
-    // Include Helios AI insights
-    if (heliosInsightsProp) {
-      payload._helios_insights = heliosInsightsProp
-    }
-
-    // Include baseline data for variance
-    if (baselineProp) {
-      payload._baseline = {
-        project_name:    baselineProp.project_name,
-        data_date:       baselineProp.data_date,
-        overall_grade:   baselineProp.overall_grade,
-        overall_score:   baselineProp.overall_score,
-        schedule_data:   baselineProp.schedule_data,
-        float_histogram: baselineProp.float_histogram,
-        longest_path:    baselineProp.longest_path,
-        summary_stats:   baselineProp.summary_stats,
-      }
-    }
-
-    // ── Strip / populate data per section toggle ──────────────────────────────
-    //
-    // The Jinja2 template guards on data presence, not on _sections flags.
-    // So we null out data for unchecked sections.
-    //
-    // Template conditional → what we do:
-    //   {% if helios_insights %}      → null payload._helios_insights
-    //   {% for check in checks %}     → empty payload.checks array
-    //   {% if scene_activities %}     → populate payload._scene_data
-    //
-    // Critical Path Trace and Analytics are always included (not user-togglable).
-
-    // Helios — null the insights object so template skips the page entirely
-    if (!sections.helios) {
-      payload._helios_insights = null
-    }
-
-    // Per-check detail pages — empty the checks array so the for-loop renders nothing
-    if (!sections.check_details) {
-      payload.checks = []
-    }
-
-    // Schedule Table — use the active Scene's filtered activity list if available.
-    // sceneActivitiesProp comes from AnalysisContext.sceneActivities, which
-    // ScheduleView writes whenever the visible activity list changes (scene switch,
-    // filter change, etc.).
-    //
-    // Three cases:
-    //   null       → ScheduleView was never mounted (user on Health view) — use full list
-    //   []         → ScheduleView mounted but all rows collapsed or filtered — send empty
-    //               (template gets no scene_activities → no schedule table rendered)
-    //   [...]      → populated scene — use exactly what's visible
-    if (sections.schedule_data && analysis.schedule_data?.activities?.length) {
-      payload._scene_data = sceneActivitiesProp !== null
-        ? sceneActivitiesProp                           // active Scene list (may be empty)
-        : analysis.schedule_data.activities             // fallback: full list (never visited ScheduleView)
-    } else {
-      payload._scene_data   = null
-      payload.schedule_data = null
-    }
-
-    // Template metadata
-    payload._sections     = sections
-    payload._company_name = companyName.trim() || null
-    payload._page_settings = {
-      size:        pageSize,
-      orientation: pageOrientation,
-      css_size:    `${pageSize} ${pageOrientation}`,
-    }
+    const projectName = analysis.project_name ?? 'Schedule'
 
     try {
-      await exportPdf(payload, analysis.project_name ?? 'Schedule')
+      // ── EXECUTIVE REPORT (summary / helios / check_details) ───────────────
+      const needsExecutive = exportMode === 'exec' && (sections.summary || sections.helios || sections.check_details)
+
+      if (needsExecutive) {
+        const payload = { ...analysis }
+
+        // Helios insights
+        if (heliosInsightsProp && sections.helios) {
+          payload._helios_insights = heliosInsightsProp
+        } else {
+          payload._helios_insights = null
+        }
+
+        // Baseline snapshot
+        if (baselineProp) {
+          payload._baseline = {
+            project_name:    baselineProp.project_name,
+            data_date:       baselineProp.data_date,
+            overall_grade:   baselineProp.overall_grade,
+            overall_score:   baselineProp.overall_score,
+            schedule_data:   baselineProp.schedule_data,
+            float_histogram: baselineProp.float_histogram,
+            longest_path:    baselineProp.longest_path,
+            summary_stats:   baselineProp.summary_stats,
+          }
+        }
+
+        // Per-check detail pages — empty array → template for-loop renders nothing
+        if (!sections.check_details) payload.checks = []
+
+        // Executive report never includes the schedule table (that's the scene pipeline)
+        payload._scene_data   = null
+        payload.schedule_data = null
+
+        // Section flags + metadata
+        payload._sections     = sections
+        payload._company_name = companyName.trim() || null
+        payload._page_settings = {
+          size:        pageSize,
+          orientation: pageOrientation,
+          css_size:    `${pageSize} ${pageOrientation}`,
+        }
+
+        await exportPdf(payload, projectName)
+      }
+
+      // ── SCENE EXPORT (schedule_data) ──────────────────────────────────────
+      if (exportMode === 'schedule') {
+        if (!sceneActivitiesProp) {
+          // sceneActivities is null — user never visited ScheduleView this session.
+          // Fall back gracefully: build a minimal scene export from raw activities.
+          const fallbackRows = (analysis.schedule_data?.activities ?? [])
+            .map(a => ({ _type: 'task', ...a }))
+
+          const fallbackPayload = {
+            rows:            fallbackRows,
+            visCols:         [
+              { key: 'id',          label: 'Activity ID',  width: 130 },
+              { key: 'name',        label: 'Activity Name',width: 230 },
+              { key: 'rem_dur',     label: 'Rem Dur',      width: 72  },
+              { key: 'start',       label: 'Start',        width: 96  },
+              { key: 'finish',      label: 'Finish',       width: 96  },
+              { key: 'total_float', label: 'Total Float',  width: 80  },
+            ],
+            gantt_start:     analysis.schedule_data?.project_start ?? null,
+            gantt_end:       analysis.schedule_data?.project_finish ?? null,
+            project_start:   analysis.schedule_data?.project_start ?? null,
+            project_finish:  analysis.schedule_data?.project_finish ?? null,
+            bar_colors:      { normal: '#02787C', critical: '#DC2626', complete: '#16A34A' },
+            bar_style:       'filled',
+            bar_opacity:     0.85,
+            bar_corner_radius: 3,
+            row_height:      26,
+            crit_only:       false,
+            show_wbs_bands:  true,
+            scene_name:      'Default',
+            project_name:    projectName,
+            company_name:    companyName.trim() || null,
+            page_settings:   { size: pageSize, orientation: pageOrientation, css_size: `${pageSize} ${pageOrientation}` },
+          }
+          await exportScene(fallbackPayload, projectName)
+
+        } else {
+          // Happy path — fully resolved scene export from ScheduleView
+          const scenePayload = {
+            ...sceneActivitiesProp,
+            scene_name:   activeSceneName ?? sceneActivitiesProp.scene_name ?? 'Scene',
+            project_name: projectName,
+            company_name: companyName.trim() || null,
+            page_settings: { size: pageSize, orientation: pageOrientation, css_size: `${pageSize} ${pageOrientation}` },
+          }
+          await exportScene(scenePayload, projectName)
+        }
+      }
+
       setSuccess(true)
       setTimeout(() => onClose(), 2200)
     } catch (err) {
@@ -745,46 +809,64 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
                   </div>
                 </div>
 
-                {/* ══ B. Content (collapsible) ══════════════════════════════ */}
-                {/* Accordion toggle — open by default */}
-                <div
-                  onClick={() => setContentOpen(v => !v)}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    cursor: 'pointer', marginBottom: contentOpen ? 12 : 20,
-                    userSelect: 'none',
-                  }}
-                >
-                  <div style={{ height: 1, background: W.border, flex: 1 }} />
-                  <div style={{
-                    fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10,
-                    color: W.muted, textTransform: 'uppercase', letterSpacing: '0.07em',
-                    whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4,
-                  }}>
-                    Content
-                    <span style={{
-                      display: 'inline-block',
-                      transform: contentOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                      transition: 'transform 0.18s',
-                      fontSize: 9, lineHeight: 1,
-                    }}>▼</span>
+                {/* ══ B. Executive Report — radio + collapsible ═══════════ */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: execOpen && execActive ? 12 : 8 }}>
+
+                  {/* Radio button — clicking selects exec mode */}
+                  <div
+                    onClick={selectExecMode}
+                    title="Generate Executive Report PDF"
+                    style={{ cursor: 'pointer', padding: '2px 8px 2px 0', flexShrink: 0 }}
+                  >
+                    <div style={{
+                      width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+                      border: `2px solid ${execActive ? W.peri : '#9CA3AF'}`,
+                      background: execActive ? W.peri : 'transparent',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      transition: 'border-color 0.15s, background 0.15s',
+                    }}>
+                      {execActive && <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff' }} />}
+                    </div>
                   </div>
-                  <div style={{ height: 1, background: W.border, flex: 1 }} />
+
+                  {/* Accordion header row — clicking toggles open/close */}
+                  <div
+                    onClick={() => setExecOpen(v => !v)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8, flex: 1,
+                      cursor: 'pointer', userSelect: 'none',
+                    }}
+                  >
+                    <div style={{ height: 1, background: W.border, flex: 1 }} />
+                    <div style={{
+                      fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10,
+                      color: execActive ? W.text : W.muted,
+                      textTransform: 'uppercase', letterSpacing: '0.07em',
+                      whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4,
+                      transition: 'color 0.15s',
+                    }}>
+                      Executive Report
+                      <span style={{
+                        display: 'inline-block',
+                        transform: execOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.18s',
+                        fontSize: 9, lineHeight: 1,
+                      }}>▼</span>
+                    </div>
+                    <div style={{ height: 1, background: W.border, flex: 1 }} />
+                  </div>
                 </div>
 
-                {contentOpen && (
-                <div style={{ marginBottom: 20 }}>
+                {execOpen && (
+                <div style={{ marginBottom: 8, opacity: execActive ? 1 : 0.38, transition: 'opacity 0.15s' }}>
                   <div style={{ fontFamily: 'var(--font-body)', fontSize: 11, color: W.muted, marginBottom: 8 }}>
                     Select which sections to include. Sections appear in this order in the PDF.
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                     {SECTIONS.map(({ key, label, desc, icon, available }) => {
-                      const checked = sections[key]
-                      // Prevent last-remaining checked section from being unchecked
-                      const isLast  = checked && Object.values(sections).filter(Boolean).length === 1
-                      // Unavailable = no data for this section; still shown but
-                      // forced-off and styled dimmed with tooltip
-                      const clickable = available && !isLast
+                      const checked   = sections[key]
+                      const isLast    = checked && Object.values(sections).filter(Boolean).length === 1
+                      const clickable = execActive && available && !isLast
 
                       return (
                         <div
@@ -794,9 +876,9 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
                           style={{
                             display: 'flex', alignItems: 'flex-start', gap: 9,
                             padding: '8px 10px', borderRadius: 7,
-                            border: `1px solid ${checked && available ? W.peri : W.border}`,
-                            background: checked && available ? 'rgba(74,111,232,0.05)' : W.card,
-                            cursor: clickable ? 'pointer' : available ? 'not-allowed' : 'default',
+                            border: `1px solid ${checked && available && execActive ? W.peri : W.border}`,
+                            background: checked && available && execActive ? 'rgba(74,111,232,0.05)' : W.card,
+                            cursor: !execActive ? 'default' : clickable ? 'pointer' : 'not-allowed',
                             opacity: !available ? 0.42 : isLast ? 0.55 : 1,
                             transition: 'border-color 0.12s, background 0.12s',
                             userSelect: 'none',
@@ -805,10 +887,10 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
                           {/* Order badge */}
                           <div style={{
                             width: 18, height: 18, borderRadius: 4, flexShrink: 0, marginTop: 1,
-                            background: checked && available ? W.peri : W.border,
+                            background: checked && available && execActive ? W.peri : W.border,
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 9,
-                            color: checked && available ? '#fff' : W.muted,
+                            color: checked && available && execActive ? '#fff' : W.muted,
                             transition: 'background 0.12s, color 0.12s',
                           }}>
                             {icon}
@@ -816,12 +898,12 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
                           {/* Checkbox */}
                           <div style={{
                             width: 15, height: 15, borderRadius: 4, flexShrink: 0, marginTop: 2,
-                            border: `1.5px solid ${checked && available ? W.peri : '#9CA3AF'}`,
-                            background: checked && available ? W.peri : 'transparent',
+                            border: `1.5px solid ${checked && available && execActive ? W.peri : '#9CA3AF'}`,
+                            background: checked && available && execActive ? W.peri : 'transparent',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             transition: 'background 0.12s, border-color 0.12s',
                           }}>
-                            {checked && available && <span style={{ color: '#fff', fontSize: 9, fontWeight: 700, lineHeight: 1 }}>✓</span>}
+                            {checked && available && execActive && <span style={{ color: '#fff', fontSize: 9, fontWeight: 700, lineHeight: 1 }}>✓</span>}
                           </div>
                           {/* Text */}
                           <div style={{ flex: 1, minWidth: 0 }}>
@@ -830,7 +912,6 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
                               color: W.text, display: 'flex', alignItems: 'center', gap: 5,
                             }}>
                               {label}
-                              {/* "Helios" sparkle badge */}
                               {key === 'helios' && (
                                 <span style={{
                                   fontSize: 8, background: 'linear-gradient(135deg,#4A6FE8,#2A4DCC)',
@@ -846,6 +927,109 @@ function ReportWizard({ analysis, baselineProp, heliosInsightsProp, sceneActivit
                         </div>
                       )
                     })}
+                  </div>
+                </div>
+                )}
+
+                {/* ══ C. Schedule — radio + collapsible ══════════════════════ */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginTop: 8, marginBottom: schedOpen && schedActive ? 12 : 8 }}>
+
+                  {/* Radio button — clicking selects schedule mode */}
+                  <div
+                    onClick={() => selectScheduleMode()}
+                    title={!hasScheduleData ? 'No schedule data available — upload a schedule file first' : 'Generate Schedule PDF'}
+                    style={{ cursor: hasScheduleData ? 'pointer' : 'default', padding: '2px 8px 2px 0', flexShrink: 0 }}
+                  >
+                    <div style={{
+                      width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+                      border: `2px solid ${schedActive ? W.peri : hasScheduleData ? '#9CA3AF' : W.border}`,
+                      background: schedActive ? W.peri : 'transparent',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      opacity: hasScheduleData ? 1 : 0.38,
+                      transition: 'border-color 0.15s, background 0.15s',
+                    }}>
+                      {schedActive && <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff' }} />}
+                    </div>
+                  </div>
+
+                  {/* Accordion header row */}
+                  <div
+                    onClick={() => setSchedOpen(v => !v)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 8, flex: 1,
+                      cursor: 'pointer', userSelect: 'none',
+                    }}
+                  >
+                    <div style={{ height: 1, background: W.border, flex: 1 }} />
+                    <div style={{
+                      fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 10,
+                      color: schedActive ? W.text : W.muted,
+                      textTransform: 'uppercase', letterSpacing: '0.07em',
+                      whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4,
+                      transition: 'color 0.15s',
+                    }}>
+                      Schedule
+                      <span style={{
+                        display: 'inline-block',
+                        transform: schedOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                        transition: 'transform 0.18s',
+                        fontSize: 9, lineHeight: 1,
+                      }}>▼</span>
+                    </div>
+                    <div style={{ height: 1, background: W.border, flex: 1 }} />
+                  </div>
+                </div>
+
+                {schedOpen && (
+                <div style={{ marginBottom: 8, opacity: schedActive && hasScheduleData ? 1 : 0.38, transition: 'opacity 0.15s' }}>
+                  {/* Single Schedule Table & Gantt card */}
+                  <div
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 9,
+                      padding: '8px 10px', borderRadius: 7,
+                      border: `1px solid ${schedActive && hasScheduleData ? W.peri : W.border}`,
+                      background: schedActive && hasScheduleData ? 'rgba(74,111,232,0.05)' : W.card,
+                      userSelect: 'none',
+                    }}
+                  >
+                    {/* Number badge */}
+                    <div style={{
+                      width: 18, height: 18, borderRadius: 4, flexShrink: 0, marginTop: 1,
+                      background: schedActive && hasScheduleData ? W.peri : W.border,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 9,
+                      color: schedActive && hasScheduleData ? '#fff' : W.muted,
+                    }}>①</div>
+                    {/* Tick (always shown when selected — not a toggle, just status) */}
+                    <div style={{
+                      width: 15, height: 15, borderRadius: 4, flexShrink: 0, marginTop: 2,
+                      border: `1.5px solid ${schedActive && hasScheduleData ? W.peri : '#9CA3AF'}`,
+                      background: schedActive && hasScheduleData ? W.peri : 'transparent',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      {schedActive && hasScheduleData && <span style={{ color: '#fff', fontSize: 9, fontWeight: 700, lineHeight: 1 }}>✓</span>}
+                    </div>
+                    {/* Text */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontFamily: 'var(--font-head)', fontWeight: 700, fontSize: 11, color: W.text,
+                        display: 'flex', alignItems: 'center', gap: 5,
+                      }}>
+                        Schedule Table & Gantt
+                        {sceneActivitiesProp && activeSceneName && (
+                          <span style={{
+                            fontSize: 8, background: 'linear-gradient(135deg,#1EC8D4,#2A4DCC)',
+                            color: '#fff', borderRadius: 3, padding: '1px 5px',
+                            fontFamily: 'var(--font-head)', fontWeight: 700,
+                          }}>{activeSceneName}</span>
+                        )}
+                      </div>
+                      <div style={{ fontFamily: 'var(--font-body)', fontSize: 9, color: W.muted, marginTop: 2, lineHeight: 1.45 }}>
+                        {hasScheduleData
+                          ? 'Exports the active Scene as a standalone PDF — activity table with inline Gantt bars'
+                          : 'No schedule data available — upload a schedule file to enable this section'}
+                      </div>
+                    </div>
                   </div>
                 </div>
                 )}
@@ -1207,8 +1391,12 @@ export default function App() {
   const [view,           setView]       = useState('upload')
   const [showWizard,     setShowWizard] = useState(false)
   const { analysis, baseline, heliosInsights, sceneActivities } = useAnalysis()
+  const { scenes, activeSceneId } = useScene()
   const [showHelios, setShowHelios] = useState(false)
   const hasData = !!analysis
+
+  // Resolve the active scene's display name for the PDF header
+  const activeSceneName = scenes.find(s => s.id === activeSceneId)?.name ?? 'Default'
 
   function fmtDataDate(isoStr) {
     if (!isoStr) return null
@@ -1273,6 +1461,7 @@ export default function App() {
           baselineProp={baseline}
           heliosInsightsProp={heliosInsights}
           sceneActivitiesProp={sceneActivities}
+          activeSceneName={activeSceneName}
           onClose={() => setShowWizard(false)}
         />
       )}
