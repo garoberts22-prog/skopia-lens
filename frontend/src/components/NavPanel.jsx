@@ -1,18 +1,26 @@
 // ── NavPanel.jsx ──────────────────────────────────────────────────────────────
 //
-// The collapsible left navigation panel.
+// v0.9.6 — Hub restructure
 //
-// BEHAVIOUR (matches SKOPIA_Lens.html prototype):
+// CHANGES from v0.9.5:
+//   - Upload and Convert nav items REMOVED
+//   - New "Hub" item added as FIRST item (above Schedule)
+//   - Hub uses ◉ icon, matching the design spec
+//
+// Nav items (new order):
+//   1. Hub          ◉   — default landing page
+//   2. Schedule     ▦
+//   3. Health Check ◈
+//
+// BEHAVIOUR (unchanged from previous):
 //   - Starts collapsed (48px wide, icons only)
-//   - Hovering expands to 200px and shows labels + badges
-//   - Pin button locks it open so it stays expanded without hovering
-//   - Active item has a cyan→blue gradient left-border accent
-//   - Badges: Schedule shows activity count, Dashboard shows grade letter
-//   - Items without data are shown but not disabled — user can still navigate
-//     to them and see the empty state (which has a CTA to upload a schedule)
+//   - Hovering expands to 200px and shows labels
+//   - Pin button locks it open
+//   - Active item has a cyan left-border accent
+//   - Items without data are shown but show an EmptyState when clicked
 //
 // PROPS:
-//   activeView   string  — current view: 'upload' | 'schedule' | 'health' | 'convert'
+//   activeView   string  — current view: 'hub' | 'schedule' | 'health'
 //   setView      fn      — called with the new view string on item click
 //   analysis     object  — the API response (or null). Used for badge values.
 //
@@ -22,63 +30,56 @@ import { useState } from 'react'
 
 export default function NavPanel({ activeView, setView, analysis }) {
   // hover = mouse is over the nav (controls expand when not pinned)
-  const [hover, setHover]   = useState(false)
+  const [hover,  setHover]  = useState(false)
   const [pinned, setPinned] = useState(false)
 
   // Nav is expanded when pinned OR when mouse is over it
   const expanded = pinned || hover
 
-  // Derive badge values from the analysis object (null = no file loaded yet)
-  const activityCount = analysis?.summary_stats?.total_activities ?? null
-  const grade         = analysis?.overall_grade ?? null
-
-  // Navigation items — icon is a text emoji/symbol matching the prototype
+  // Navigation items — three items only after Hub restructure
   // badge: null = no badge shown; a value = shown in the badge chip
   const navItems = [
-    { id: 'upload',    icon: '⬆',  label: 'Upload',    badge: null },
-    { id: 'schedule',  icon: '▦',   label: 'Schedule',  badge: null },
-    { id: 'health',    icon: '◈',   label: 'Health Check', badge: null },
-    { id: 'convert',   icon: '⇄',   label: 'Convert',   badge: null },
+    { id: 'hub',      icon: '◉',  label: 'Hub',         badge: null },
+    { id: 'schedule', icon: '▦',   label: 'Schedule',    badge: null },
+    { id: 'health',   icon: '◈',   label: 'Health Check',badge: null },
   ]
 
   return (
-    // Outer nav container — width animates via CSS transition defined in theme.css
+    // Outer nav container — width animates via CSS transition
     <nav
       style={{
-        width:           expanded ? 200 : 48,
-        flexShrink:      0,
-        background:      'var(--sk-nav)',        // #16213e dark navy
-        display:         'flex',
-        flexDirection:   'column',
-        overflow:        'hidden',
-        transition:      'width 0.22s cubic-bezier(0.4, 0, 0.2, 1)',
-        borderRight:     '1px solid #1e2d4a',
-        position:        'relative',
-        zIndex:          100,
+        width:          expanded ? 200 : 48,
+        flexShrink:     0,
+        background:     'var(--sk-nav)',        // #16213e dark navy
+        display:        'flex',
+        flexDirection:  'column',
+        overflow:       'hidden',
+        transition:     'width 0.22s cubic-bezier(0.4, 0, 0.2, 1)',
+        borderRight:    '1px solid #1e2d4a',
+        position:       'relative',
+        zIndex:         100,
       }}
       onMouseEnter={() => !pinned && setHover(true)}
       onMouseLeave={() => !pinned && setHover(false)}
     >
 
       {/* ── Header-height strip ────────────────────────────────────────────
-          This block sits at the top of the nav and visually aligns with the
-          app header bar (48px) + gradient accent strip (3px) = 51px total.
-          It uses the same charcoal background so the top-left corner looks
-          like a unified dark band across the full top of the screen.
+          Visually aligns with the app header bar (65px) + gradient strip (3px).
+          Same charcoal background so the top-left corner reads as a unified
+          dark band across the full top of the screen.
           ─────────────────────────────────────────────────────────────────── */}
       <div style={{
-        height:          51,  // 48px header + 3px gradient strip
-        flexShrink:      0,
-        background:      'var(--sk-header)',      // charcoal — matches app header
-        borderBottom:    '1px solid #1e2d4a',
-        display:         'flex',
-        alignItems:      'center',
-        justifyContent:  'center',
-        overflow:        'hidden',
+        height:         68,  // 65px header + 3px gradient strip
+        flexShrink:     0,
+        background:     'var(--sk-header)',      // charcoal — matches app header
+        borderBottom:   '1px solid #1e2d4a',
+        display:        'flex',
+        alignItems:     'center',
+        justifyContent: 'center',
+        overflow:       'hidden',
       }}>
-        {/* Small gradient logo mark — visible in both collapsed and expanded states */}
-        
-	<div style={{ width: 26, height: 26, flexShrink: 0 }} />
+        {/* Logo mark placeholder spacer — 26×26 matches original */}
+        <div style={{ width: 26, height: 26, flexShrink: 0 }} />
       </div>
 
       {/* ── Navigation items ──────────────────────────────────────────────── */}
@@ -115,10 +116,9 @@ export default function NavPanel({ activeView, setView, analysis }) {
                 whiteSpace:     'nowrap',
                 overflow:       'hidden',
                 width:          '100%',
-                // Left accent bar for active item — gradient strip on left edge
-                // We use boxShadow inset trick to avoid a separate element
+                // Left accent bar for active item — inset box-shadow on left edge
                 boxShadow:      isActive
-                  ? 'inset 3px 0 0 0 #1EC8D4'  // cyan left border
+                  ? 'inset 3px 0 0 0 #1EC8D4'
                   : 'none',
                 transition:     'background 0.12s, color 0.12s',
                 position:       'relative',
@@ -144,14 +144,14 @@ export default function NavPanel({ activeView, setView, analysis }) {
               {/* Badge — only when expanded AND a badge value exists */}
               {expanded && item.badge != null && (
                 <span style={{
-                  fontFamily:  'var(--font-mono)',
-                  fontSize:    9,
-                  fontWeight:  700,
-                  background:  'rgba(74, 111, 232, 0.3)',
-                  color:       '#7C9EFF',
+                  fontFamily:   'var(--font-mono)',
+                  fontSize:     9,
+                  fontWeight:   700,
+                  background:   'rgba(74, 111, 232, 0.3)',
+                  color:        '#7C9EFF',
                   borderRadius: 3,
-                  padding:     '1px 5px',
-                  flexShrink:  0,
+                  padding:      '1px 5px',
+                  flexShrink:   0,
                 }}>
                   {item.badge}
                 </span>
@@ -162,29 +162,27 @@ export default function NavPanel({ activeView, setView, analysis }) {
       </div>
 
       {/* ── Pin / unpin toggle ─────────────────────────────────────────────
-          At the bottom of the nav. Click to lock the panel open.
-          Arrow direction indicates the current state:
-            ▶ = collapsed / unpinned  → click to pin
-            ◀ = pinned (expanded)     → click to unpin
+          Arrow direction:
+            ▶ = collapsed / unpinned → click to pin
+            ◀ = pinned (expanded)    → click to unpin
           ─────────────────────────────────────────────────────────────────── */}
       <div
         onClick={() => setPinned(v => !v)}
         title={pinned ? 'Unpin sidebar' : 'Pin sidebar open'}
         style={{
-          height:          36,
-          display:         'flex',
-          alignItems:      'center',
-          justifyContent:  'center',
-          borderTop:       '1px solid #1e2d4a',
-          flexShrink:      0,
-          cursor:          'pointer',
-          color:           pinned ? '#4A6FE8' : '#334155',
-          transition:      'color 0.12s',
-          fontSize:        14,
-          userSelect:      'none',
+          height:         36,
+          display:        'flex',
+          alignItems:     'center',
+          justifyContent: 'center',
+          borderTop:      '1px solid #1e2d4a',
+          flexShrink:     0,
+          cursor:         'pointer',
+          color:          pinned ? '#4A6FE8' : '#334155',
+          transition:     'color 0.12s',
+          fontSize:       14,
+          userSelect:     'none',
         }}
       >
-        {/* Show ◀ when expanded+pinned, ▶ otherwise */}
         {expanded && pinned ? '◀' : '▶'}
       </div>
     </nav>

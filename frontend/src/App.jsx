@@ -32,6 +32,7 @@ import UploadView        from './pages/UploadView'
 import HealthCheckView   from './pages/HealthCheckView'
 import ScheduleView      from './pages/ScheduleView'
 import ConvertView       from './pages/ConvertView'
+import HubView           from './pages/HubView'
 import HeliosButton      from './components/HeliosButton'
 import HeliosPanel       from './components/HeliosPanel'
 
@@ -1388,7 +1389,7 @@ function EmptyState({ label, onUpload }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [view,           setView]       = useState('upload')
+  const [view,           setView]       = useState('hub')
   const [showWizard,     setShowWizard] = useState(false)
   const { analysis, baseline, heliosInsights, sceneActivities } = useAnalysis()
   const { scenes, activeSceneId } = useScene()
@@ -1447,10 +1448,10 @@ export default function App() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
         <NavPanel activeView={view} setView={setView} analysis={analysis} />
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-          {view === 'upload'   && <UploadView onNavigate={setView} />}
-          {view === 'health'   && (hasData ? <HealthCheckView onNavigate={setView} /> : <EmptyState label="No schedule loaded" onUpload={() => setView('upload')} />)}
-          {view === 'schedule' && (hasData ? <ScheduleView onNavigate={setView} />    : <EmptyState label="No schedule loaded" onUpload={() => setView('upload')} />)}
-          {view === 'convert'  && <ConvertView />}
+          {view === 'hub'      && <HubView onNavigate={setView} />}
+          {view === 'health'   && (hasData ? <HealthCheckView onNavigate={setView} /> : <EmptyState label="No schedule loaded" onUpload={() => setView('hub')} />)}
+          {view === 'schedule' && (hasData ? <ScheduleView onNavigate={setView} />    : <EmptyState label="No schedule loaded" onUpload={() => setView('hub')} />)}
+          
         </div>
       </div>
 
